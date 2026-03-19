@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { Search, Plus, Building2, Phone, MapPin } from 'lucide-react';
-import { db } from '../db/database';
+import { Search, Plus, Building2, Phone, MapPin, Edit2, Trash2 } from 'lucide-react';
+import { db, deleteClient } from '../db/database';
 import type { Client, ClientCategory, FoodEstablishmentType } from '../types';
 import { Button } from '../components/ui/Button';
 import { Card } from '../components/ui/Card';
@@ -15,6 +15,7 @@ export function Clients() {
   const navigate = useNavigate();
   const [clients, setClients] = useState<Client[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState<ClientCategory | 'all'>('all');
   const { register, handleSubmit, watch, reset, formState: { errors } } = useForm<Client>();
@@ -36,27 +37,63 @@ export function Clients() {
 
   const onSubmit = async (data: Client) => {
     try {
-      const newClient: Client = {
-        ...data,
-        id: generateId(),
-        createdAt: new Date(),
-      };
-      
-      // Clean up foodTypes if category is not alimentos
-      if (newClient.category !== 'alimentos') {
-        delete newClient.foodTypes;
-      } else if (!newClient.foodTypes || newClient.foodTypes.length === 0) {
-        // default generic type if none selected
-        newClient.foodTypes = ['servico_alimentacao'];
+      if (editingClient) {
+        // Update existing client
+        const updatedClient: Client = {
+          ...editingClient,
+          ...data,
+          // category change might require cleanup but we keep it simple for now
+        };
+        
+        if (updatedClient.category !== 'alimentos') {
+          delete updatedClient.foodTypes;
+        }
+
+        await db.clients.put(updatedClient);
+      } else {
+        // Create new client
+        const newClient: Client = {
+          ...data,
+          id: generateId(),
+          createdAt: new Date(),
+        };
+        
+        if (newClient.category !== 'alimentos') {
+          delete newClient.foodTypes;
+        } else if (!newClient.foodTypes || newClient.foodTypes.length === 0) {
+          newClient.foodTypes = ['servico_alimentacao'];
+        }
+
+        await db.clients.add(newClient);
       }
 
-      await db.clients.add(newClient);
       setIsModalOpen(false);
+      setEditingClient(null);
       reset();
       loadClients();
     } catch (err) {
       console.error(err);
       alert('Erro ao salvar cliente: ' + (err instanceof Error ? err.message : String(err)));
+    }
+  };
+
+  const handleEdit = (client: Client, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEditingClient(client);
+    reset(client);
+    setIsModalOpen(true);
+  };
+
+  const handleDelete = async (client: Client, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (window.confirm(`Deseja realmente excluir o cliente "${client.name}"? Todas as inspeções e fotos associadas serão apagadas permanentemente.`)) {
+      try {
+        await deleteClient(client.id);
+        loadClients();
+      } catch (err) {
+        console.error(err);
+        alert('Erro ao excluir cliente.');
+      }
     }
   };
 
@@ -139,6 +176,22 @@ export function Clients() {
                     )}
                   </div>
                 </div>
+                <div className="flex gap-2 self-start ml-4">
+                  <button 
+                    onClick={(e) => handleEdit(client, e)}
+                    className="p-2 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
+                    title="Editar"
+                  >
+                    <Edit2 className="h-5 w-5" />
+                  </button>
+                  <button 
+                    onClick={(e) => handleDelete(client, e)}
+                    className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                    title="Excluir"
+                  >
+                    <Trash2 className="h-5 w-5" />
+                  </button>
+                </div>
               </div>
             </Card>
           ))
@@ -147,8 +200,8 @@ export function Clients() {
 
       <Modal 
         isOpen={isModalOpen} 
-        onClose={() => { setIsModalOpen(false); reset(); }} 
-        title="Cadastrar Novo Cliente"
+        onClose={() => { setIsModalOpen(false); setEditingClient(null); reset(); }} 
+        title={editingClient ? "Editar Cliente" : "Cadastrar Novo Cliente"}
       >
         <form id="client-form" onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div>
