@@ -5,7 +5,7 @@
 // Estética: V. atual (114 itens) | ILPI: V.11/2024 (81 itens)
 // ============================================================
 
-import type { ChecklistTemplate, Client } from '../types';
+import { type ChecklistTemplate, type Client } from '../types';
 import { alimentosTemplates } from './templates_alimentos';
 import { getExtraSections } from './templates_alimentos_segmentos';
 

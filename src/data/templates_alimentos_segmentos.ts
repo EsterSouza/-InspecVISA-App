@@ -40,7 +40,7 @@
 // aditivos desatualizados nos rótulos já estão irregulares.
 // ============================================================
 
-import type { Section } from '../types';
+import { type Section } from '../types';
 
 // ── HELPER ──────────────────────────────────────────────────
 // Mapeia serviceType → IDs das seções extras a carregar
