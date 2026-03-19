@@ -163,6 +163,11 @@ export function Clients() {
                      }>
                        {client.category.toUpperCase()}
                      </Badge>
+                     {client.category === 'alimentos' && client.foodTypes && client.foodTypes.map(ft => (
+                       <Badge key={ft} variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
+                         {FOOD_SEGMENT_LABELS[ft as FoodEstablishmentType] || ft}
+                       </Badge>
+                     ))}
                   </div>
                   <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 text-sm text-gray-600">
                     {client.responsibleName && (
