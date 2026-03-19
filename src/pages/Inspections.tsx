@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Search, Plus, Calendar, Activity, CheckCircle, Trash2 } from 'lucide-react';
+import { Search, Plus, Calendar, Activity, CheckCircle, Trash2, Edit } from 'lucide-react';
 import { db } from '../db/database';
 import type { Inspection, Client } from '../types';
 import { Button } from '../components/ui/Button';
@@ -132,7 +132,7 @@ export function Inspections() {
                         </div>
                       )}
                       {insp.clientCategory && (
-                        <div className="col-span-1 sm:col-span-2 text-xs font-semibold text-gray-500 tracking-wider">
+                        <div className="col-span-1 sm:col-span-2 text-xs font-semibold text-gray-500 tracking-wider font-mono">
                           CATEGORIA: {insp.clientCategory.toUpperCase()}
                         </div>
                       )}
@@ -150,6 +150,22 @@ export function Inspections() {
                     >
                       {insp.status === 'in_progress' ? 'Continuar' : 'Ver Relatório'}
                     </Button>
+                    
+                    {insp.status === 'completed' && (
+                      <Button 
+                        variant="outline" 
+                        size="icon"
+                        className="h-10 w-10 text-primary-600 border-primary-100 hover:bg-primary-50"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate('/execute', { state: { inspectionId: insp.id }});
+                        }}
+                        title="Editar Inspeção"
+                      >
+                        <Edit className="h-4 w-4" />
+                      </Button>
+                    )}
+
                     <Button 
                       variant="ghost" 
                       className="text-red-500 hover:bg-red-50 hover:text-red-600 px-3"
