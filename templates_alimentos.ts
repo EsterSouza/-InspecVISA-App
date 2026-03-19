@@ -61,7 +61,7 @@
 //        Recomendável   = 2,  isCritical: false
 // ============================================================
 
-import { type ChecklistTemplate } from '../types';
+import { ChecklistTemplate } from '../types';
 
 export const alimentosTemplates: ChecklistTemplate[] = [
 
