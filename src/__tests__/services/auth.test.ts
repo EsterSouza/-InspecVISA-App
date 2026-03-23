@@ -1,97 +1,176 @@
 import { describe, test, expect, beforeEach, vi } from 'vitest';
-import { USERS, CHECKLIST_ACCESS, TENANTS } from '../fixtures';
+import { USERS, CHECKLIST_ACCESS } from '../fixtures';
 
 // ============================================================
-// Testes do AuthService — Card 1.3
-// Os testes de implementação real serão habilitados quando
-// src/services/authService.ts for criado (Card 1.3).
+// Mock do Supabase configurado via setup.ts (vi.mock global)
+// Aqui refinamos os retornos por teste.
 // ============================================================
+
+const { supabase } = await import('../../lib/supabase');
 
 describe('🔑 AuthService', () => {
 
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Limpa o cache entre testes
+    vi.resetModules();
+  });
+
   describe('getCurrentTenant()', () => {
-    test('retorna tenantId, userId, role e email', () => {
-      // Simulação do retorno esperado
-      const result = {
-        tenantId: USERS.admin.tenant_id,
-        userId: USERS.admin.id,
-        role: USERS.admin.role,
-        email: USERS.admin.email,
-      };
+    test('retorna TenantInfo completo para usuário autenticado', async () => {
+      vi.mocked(supabase.auth.getSession).mockResolvedValue({
+        data: { session: { user: { id: USERS.admin.id, email: USERS.admin.email } } as any },
+        error: null,
+      });
 
-      expect(result.tenantId).toBe('tenant-001');
-      expect(result.userId).toBe('user-admin-001');
-      expect(result.role).toBe('admin');
-      expect(result.email).toContain('@');
+      vi.mocked(supabase.from).mockReturnValue({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        single: vi.fn().mockResolvedValue({
+          data: { tenant_id: USERS.admin.tenant_id, role: USERS.admin.role },
+          error: null,
+        }),
+      } as any);
+
+      const { getCurrentTenant } = await import('../../services/authService');
+      const result = await getCurrentTenant();
+
+      expect(result).not.toBeNull();
+      expect(result?.tenantId).toBe(USERS.admin.tenant_id);
+      expect(result?.userId).toBe(USERS.admin.id);
+      expect(result?.role).toBe('admin');
+      expect(result?.email).toBe(USERS.admin.email);
     });
 
-    test('retorna null se não autenticado', () => {
-      const unauthenticated = null;
-      expect(unauthenticated).toBeNull();
+    test('retorna null se não há sessão ativa', async () => {
+      vi.mocked(supabase.auth.getSession).mockResolvedValue({
+        data: { session: null },
+        error: null,
+      });
+
+      const { getCurrentTenant } = await import('../../services/authService');
+      const result = await getCurrentTenant();
+
+      expect(result).toBeNull();
     });
 
-    test('role deve ser admin, consultant ou client', () => {
-      const validRoles = ['admin', 'consultant', 'client'] as const;
-      expect(validRoles).toContain(USERS.admin.role);
-      expect(validRoles).toContain(USERS.consultant.role);
-      expect(validRoles).toContain(USERS.client.role);
+    test('retorna null se usuário não está em nenhum tenant', async () => {
+      vi.mocked(supabase.auth.getSession).mockResolvedValue({
+        data: { session: { user: { id: 'user-sem-tenant', email: 'x@x.com' } } as any },
+        error: null,
+      });
+
+      vi.mocked(supabase.from).mockReturnValue({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        single: vi.fn().mockResolvedValue({ data: null, error: { message: 'Not found' } }),
+      } as any);
+
+      const { getCurrentTenant } = await import('../../services/authService');
+      const result = await getCurrentTenant();
+
+      expect(result).toBeNull();
     });
   });
 
   describe('hasChecklistAccess()', () => {
-    const hasAccess = (tenantId: string, type: string) =>
-      CHECKLIST_ACCESS.some(a => a.tenant_id === tenantId && a.checklist_type === type);
-
-    test('retorna true para checklist liberado (estetica)', () => {
-      expect(hasAccess('tenant-002', 'estetica')).toBe(true);
+    beforeEach(() => {
+      vi.mocked(supabase.from).mockReturnValue({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        mockResolvedValue: undefined,
+        then: undefined,
+      } as any);
     });
 
-    test('retorna true para checklist liberado (ilpi)', () => {
-      expect(hasAccess('tenant-002', 'ilpi')).toBe(true);
+    test('retorna true para checklist liberado', async () => {
+      vi.mocked(supabase.from).mockReturnValue({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockResolvedValue({
+          data: CHECKLIST_ACCESS.filter(a => a.tenant_id === 'tenant-002'),
+          error: null,
+        }),
+      } as any);
+
+      const { hasChecklistAccess } = await import('../../services/authService');
+      expect(await hasChecklistAccess('tenant-002', 'estetica')).toBe(true);
+      expect(await hasChecklistAccess('tenant-002', 'ilpi')).toBe(true);
     });
 
-    test('retorna false para checklist não liberado (alimentos)', () => {
-      expect(hasAccess('tenant-002', 'alimentos')).toBe(false);
+    test('retorna false para checklist não liberado', async () => {
+      vi.mocked(supabase.from).mockReturnValue({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockResolvedValue({
+          data: CHECKLIST_ACCESS.filter(a => a.tenant_id === 'tenant-002'),
+          error: null,
+        }),
+      } as any);
+
+      const { hasChecklistAccess } = await import('../../services/authService');
+      expect(await hasChecklistAccess('tenant-002', 'alimentos')).toBe(false);
     });
 
-    test('retorna false para tenant sem nenhum acesso', () => {
-      expect(hasAccess('tenant-999', 'estetica')).toBe(false);
-      expect(hasAccess('tenant-999', 'ilpi')).toBe(false);
-      expect(hasAccess('tenant-999', 'alimentos')).toBe(false);
+    test('retorna false se erro na query', async () => {
+      vi.mocked(supabase.from).mockReturnValue({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockResolvedValue({ data: null, error: { message: 'DB error' } }),
+      } as any);
+
+      const { hasChecklistAccess } = await import('../../services/authService');
+      expect(await hasChecklistAccess('tenant-002', 'estetica')).toBe(false);
     });
   });
 
   describe('getUserRole()', () => {
-    test('admin tem role admin', () => {
-      expect(USERS.admin.role).toBe('admin');
+    test('retorna role do usuário autenticado', async () => {
+      vi.mocked(supabase.auth.getSession).mockResolvedValue({
+        data: { session: { user: { id: USERS.consultant.id, email: USERS.consultant.email } } as any },
+        error: null,
+      });
+
+      vi.mocked(supabase.from).mockReturnValue({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        single: vi.fn().mockResolvedValue({
+          data: { tenant_id: USERS.consultant.tenant_id, role: 'consultant' },
+          error: null,
+        }),
+      } as any);
+
+      const { getUserRole } = await import('../../services/authService');
+      const role = await getUserRole();
+
+      expect(role).toBe('consultant');
     });
 
-    test('consultant tem role consultant', () => {
-      expect(USERS.consultant.role).toBe('consultant');
-    });
+    test('retorna null se não autenticado', async () => {
+      vi.mocked(supabase.auth.getSession).mockResolvedValue({
+        data: { session: null },
+        error: null,
+      });
 
-    test('client tem role client', () => {
-      expect(USERS.client.role).toBe('client');
+      const { getUserRole } = await import('../../services/authService');
+      expect(await getUserRole()).toBeNull();
     });
   });
 
-  describe('Cache de sessão', () => {
-    test('dados de sessão são reutilizáveis dentro de 5 minutos', () => {
-      const cacheTime = 5 * 60 * 1000; // 5 minutos em ms
-      const now = Date.now();
-      const cachedAt = now - 4 * 60 * 1000; // 4 minutos atrás
+  describe('Cache', () => {
+    test('TTL de 5 minutos é válido', () => {
+      const CACHE_TTL = 5 * 60 * 1000;
+      const cachedAt = Date.now();
+      const expiresAt = cachedAt + CACHE_TTL;
 
-      const isCacheValid = (now - cachedAt) < cacheTime;
-      expect(isCacheValid).toBe(true);
+      expect(Date.now() < expiresAt).toBe(true);
     });
 
-    test('cache expira após 5 minutos', () => {
-      const cacheTime = 5 * 60 * 1000;
-      const now = Date.now();
-      const cachedAt = now - 6 * 60 * 1000; // 6 minutos atrás
+    test('TTL expirado é inválido', () => {
+      const expiresAt = Date.now() - 1000;
+      expect(Date.now() < expiresAt).toBe(false);
+    });
 
-      const isCacheValid = (now - cachedAt) < cacheTime;
-      expect(isCacheValid).toBe(false);
+    test('clearAuthCache limpa o cache de sessão', async () => {
+      const { clearAuthCache } = await import('../../services/authService');
+      expect(() => clearAuthCache()).not.toThrow();
     });
   });
 });

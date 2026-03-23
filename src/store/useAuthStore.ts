@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { supabase } from '../lib/supabase';
+import { clearAuthCache } from '../services/authService';
 import type { User } from '@supabase/supabase-js';
 
 interface AuthState {
@@ -21,6 +22,7 @@ export const useAuthStore = create<AuthState>()(
       setUser: (user) => set({ user, loading: false }),
       signOut: async () => {
         await supabase.auth.signOut();
+        clearAuthCache();
         set({ user: null });
       },
       initialize: async () => {
