@@ -14,7 +14,8 @@
     "test:security": "vitest run src/__tests__/security",
     "test:services": "vitest run src/__tests__/services",
     "test:components": "vitest run src/__tests__/components",
-    "test:integration": "vitest run src/__tests__/integration"
+    "test:integration": "vitest run src/__tests__/integration",
+    "seed:dev": "node --env-file=.env scripts/seed-dev.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.2",

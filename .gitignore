@@ -1,6 +1,7 @@
-# Environment variables (secrets)
+# Environment variables (secrets — nunca commitar)
 .env
 .env.local
+.env.development
 .env.production
 
 # Logs
