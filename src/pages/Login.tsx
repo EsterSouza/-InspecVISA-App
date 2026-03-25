@@ -32,7 +32,7 @@ export function Login() {
             data: {
               full_name: email.split('@')[0],
             },
-            redirectTo: `${import.meta.env.VITE_SITE_URL}/login`
+            emailRedirectTo: `${import.meta.env.VITE_SITE_URL}/login`
           }
         });
         if (authError) throw authError;
