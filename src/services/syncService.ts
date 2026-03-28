@@ -14,31 +14,31 @@ export async function syncData() {
   const user = useAuthStore.getState().user;
   if (!user) return;
 
+  // Global lock to prevent concurrent syncs
+  if ((window as any).isSyncingGlobally) return;
+  (window as any).isSyncingGlobally = true;
+
   try {
-    // 1. PUSH local changes to Supabase
-    // We'll sync Clientes as an example. A full sync would include all tables.
-    const localClients = await db.clients.toArray();
-    
-    if (localClients.length > 0) {
-      // ---> PHASE 26: INTELLIGENT AUTO-MERGE BY CNPJ <---
-      // Fetch remote CNPJs to detect offline duplicates that got different UUIDs
+    console.log('[Sync] Starting Safe Sync...');
+
+    // 1. Sync CLIENTS
+    // PUSH Pending
+    const pendingClients = await db.clients.where('synced').equals(0).toArray();
+    if (pendingClients.length > 0) {
+      // PHASE 26 Merge logic remains: check CNPJ before push
       const { data: remoteCnpjData } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('id, cnpj')));
       const remoteCnpjMap = new Map<string, string>(
         remoteCnpjData?.filter((c: any) => c.cnpj).map((c: any) => [c.cnpj, c.id]) || []
       );
 
-      for (const localClient of localClients) {
+      for (const localClient of pendingClients) {
         if (localClient.cnpj && remoteCnpjMap.has(localClient.cnpj)) {
           const canonicalRemoteId = remoteCnpjMap.get(localClient.cnpj)!;
           if (localClient.id !== canonicalRemoteId) {
             const oldId = localClient.id;
-            console.log(`[Sync] Merging local client ${oldId} -> ${canonicalRemoteId} (CNPJ: ${localClient.cnpj})`);
-            
-            // Re-link Inspections and Schedules to new ID
+            // Relink local records to canonical ID
             await db.inspections.where({ clientId: oldId }).modify({ clientId: canonicalRemoteId });
             await db.schedules.where({ clientId: oldId }).modify({ clientId: canonicalRemoteId });
-            
-            // Delete old duplicate client entry and save it under the remote canonical ID
             await db.clients.delete(oldId);
             localClient.id = canonicalRemoteId;
             await db.clients.put(localClient);
@@ -46,151 +46,134 @@ export async function syncData() {
         }
       }
 
-      // Re-fetch local clients after potential ID merges
-      const updatedLocalClients = await db.clients.toArray();
-
-      const { error: pushError } = await withTimeout<any>(
-        Promise.resolve(supabase.from('clients').upsert(
-          updatedLocalClients.map(c => ({
-            id: c.id,
-            name: c.name,
-            cnpj: c.cnpj,
-            address: c.address,
-            category: c.category,
-            food_types: c.foodTypes,
-            responsible_name: c.responsibleName,
-            phone: c.phone,
-            email: c.email,
-            created_at: c.createdAt,
-            user_id: user.id
-          })),
-          { onConflict: 'id' }
-        )) // close Promise.resolve
-      );
+      // Re-fetch to get updated IDs after merge
+      const clientsToPush = await db.clients.where('synced').equals(0).toArray();
+      const { error: pushError } = await withTimeout<any>(Promise.resolve(supabase.from('clients').upsert(
+        clientsToPush.map(c => ({
+          id: c.id, name: c.name, cnpj: c.cnpj, address: c.address, category: c.category,
+          food_types: c.foodTypes, responsible_name: c.responsibleName, phone: c.phone,
+          email: c.email, created_at: c.createdAt, user_id: user.id
+        }))
+      )));
       
-      if (pushError) console.error('Sync Push Error (Clients):', pushError);
+      if (!pushError) {
+        await db.clients.where('id').anyOf(clientsToPush.map(c => c.id)).modify({ synced: true });
+      } else {
+        console.error('[Sync] Client Push Error:', pushError);
+      }
     }
 
-    // 2. PULL remote changes from Supabase
-    const { data: remoteClients, error: pullError } = await withTimeout<any>(
-      Promise.resolve(supabase.from('clients').select('*'))
-    );
-
-    if (pullError) {
-      console.error('Sync Pull Error (Clients):', pullError);
-    } else if (remoteClients) {
-      // Update local Dexie with remote data
-      await db.clients.bulkPut(remoteClients.map((c: any) => ({
-        id: c.id,
-        name: c.name,
-        cnpj: c.cnpj,
-        address: c.address,
-        category: c.category as any,
-        foodTypes: c.food_types,
-        responsibleName: c.responsible_name,
-        phone: c.phone,
-        email: c.email,
-        createdAt: new Date(c.created_at),
-        city: c.city,
-        state: c.state
-      })));
+    // PULL Clients
+    const { data: remoteClients } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('*')));
+    if (remoteClients) {
+      for (const rc of remoteClients) {
+        const local = await db.clients.get(rc.id);
+        if (!local || local.synced !== false) {
+          await db.clients.put({
+            id: rc.id, name: rc.name, cnpj: rc.cnpj, address: rc.address,
+            category: rc.category as any, foodTypes: rc.food_types,
+            responsibleName: rc.responsible_name, phone: rc.phone, email: rc.email,
+            createdAt: new Date(rc.created_at), city: rc.city, state: rc.state,
+            synced: true
+          });
+        }
+      }
     }
 
-    // --- REPEAT for Inspections and Responses ---
-    const localInspections = await db.inspections.toArray();
-    if (localInspections.length > 0) {
-      await withTimeout<any>(
-        Promise.resolve(supabase.from('inspections').upsert(
-        localInspections.map(i => ({
-          id: i.id,
-          client_id: i.clientId,
-          template_id: i.templateId,
-          consultant_name: i.consultantName,
-          inspection_date: i.inspectionDate,
-          status: i.status,
-          observations: i.observations,
-          created_at: i.createdAt,
-          completed_at: i.completedAt,
-          user_id: user.id
+    // 2. Sync INSPECTIONS
+    // PUSH Pending
+    const pendingInspections = await db.inspections.where('synced').equals(0).toArray();
+    if (pendingInspections.length > 0) {
+      const { error: insPushError } = await withTimeout<any>(Promise.resolve(supabase.from('inspections').upsert(
+        pendingInspections.map(i => ({
+          id: i.id, client_id: i.clientId, template_id: i.templateId,
+          consultant_name: i.consultantName, inspection_date: i.inspectionDate,
+          status: i.status, observations: i.observations, created_at: i.createdAt,
+          completed_at: i.completedAt, user_id: user.id
         }))
       )));
+      if (!insPushError) {
+        await db.inspections.where('id').anyOf(pendingInspections.map(i => i.id)).modify({ synced: true });
+      }
     }
 
-    const { data: remoteInspections } = await withTimeout<any>(Promise.resolve(supabase.from('inspections').select('*')));
-    if (remoteInspections) {
-      await db.inspections.bulkPut(remoteInspections.map((i: any) => ({
-        id: i.id,
-        clientId: i.client_id,
-        templateId: i.template_id,
-        consultantName: i.consultant_name,
-        inspectionDate: new Date(i.inspection_date),
-        status: i.status as any,
-        observations: i.observations,
-        createdAt: new Date(i.created_at),
-        completedAt: i.completed_at ? new Date(i.completed_at) : undefined
-      })));
+    // PULL Inspections
+    const { data: remoteInspec } = await withTimeout<any>(Promise.resolve(supabase.from('inspections').select('*')));
+    if (remoteInspec) {
+      for (const ri of remoteInspec) {
+        const local = await db.inspections.get(ri.id);
+        if (!local || local.synced !== false) {
+          await db.inspections.put({
+            id: ri.id, clientId: ri.client_id, templateId: ri.template_id,
+            consultantName: ri.consultant_name, inspectionDate: new Date(ri.inspection_date),
+            status: ri.status as any, observations: ri.observations,
+            createdAt: new Date(ri.created_at), synced: true,
+            completedAt: ri.completed_at ? new Date(ri.completed_at) : undefined
+          });
+        }
+      }
     }
 
-    // Sync Responses
-    const localResponses = await db.responses.toArray();
-    if (localResponses.length > 0) {
-      await withTimeout<any>(
-        Promise.resolve(supabase.from('responses').upsert(
-        localResponses.map(r => ({
-          id: r.id,
-          inspection_id: r.inspectionId,
-          item_id: r.itemId,
-          result: r.result,
-          situation_description: r.situationDescription,
-          corrective_action: r.correctiveAction,
-          created_at: r.createdAt,
-          updated_at: r.updatedAt,
-          user_id: user.id
+    // 3. Sync RESPONSES
+    // PUSH Pending
+    const pendingResponses = await db.responses.where('synced').equals(0).toArray();
+    if (pendingResponses.length > 0) {
+      const { error: resPushError } = await withTimeout<any>(Promise.resolve(supabase.from('responses').upsert(
+        pendingResponses.map(r => ({
+          id: r.id, inspection_id: r.inspectionId, item_id: r.itemId,
+          result: r.result, situation_description: r.situationDescription,
+          corrective_action: r.correctiveAction, created_at: r.createdAt,
+          updated_at: r.updatedAt, user_id: user.id
         }))
       )));
+      if (!resPushError) {
+        await db.responses.where('id').anyOf(pendingResponses.map(r => r.id)).modify({ synced: true });
+      }
     }
 
-    const { data: remoteResponses } = await withTimeout<any>(Promise.resolve(supabase.from('responses').select('*')), 25000); // 25s for large response sets
-    if (remoteResponses) {
-      await db.responses.bulkPut(remoteResponses.map((r: any) => ({
-        id: r.id,
-        inspectionId: r.inspection_id,
-        itemId: r.item_id,
-        result: r.result as any,
-        situationDescription: r.situation_description,
-        correctiveAction: r.corrective_action,
-        createdAt: new Date(r.created_at),
-        updatedAt: new Date(r.updated_at),
-        photos: [] // Photos synced separately
-      })));
+    // PULL Responses
+    const { data: remoteRes } = await withTimeout<any>(Promise.resolve(supabase.from('responses').select('*')), 25000);
+    if (remoteRes) {
+      for (const rr of remoteRes) {
+        const local = await db.responses.get(rr.id);
+        if (!local || local.synced !== false) {
+          await db.responses.put({
+            id: rr.id, inspectionId: rr.inspection_id, itemId: rr.item_id,
+            result: rr.result as any, situationDescription: rr.situation_description,
+            correctiveAction: rr.corrective_action, createdAt: new Date(rr.created_at),
+            updatedAt: new Date(rr.updated_at), photos: [], synced: true
+          });
+        }
+      }
     }
 
-    // Sync schedules
-    const localSchedules = await db.schedules.toArray();
-    if (localSchedules.length > 0) {
-      await withTimeout<any>(
-        Promise.resolve(supabase.from('schedules').upsert(
-        localSchedules.map(s => ({
-          id: s.id,
-          client_id: s.clientId,
-          scheduled_at: s.scheduledAt,
-          status: s.status,
-          notes: s.notes,
-          user_id: user.id
+    // 4. Sync SCHEDULES
+    // PUSH Pending
+    const pendingSchedules = await db.schedules.where('synced').equals(0).toArray();
+    if (pendingSchedules.length > 0) {
+      const { error: schPushError } = await withTimeout<any>(Promise.resolve(supabase.from('schedules').upsert(
+        pendingSchedules.map(s => ({
+          id: s.id, client_id: s.clientId, scheduled_at: s.scheduledAt,
+          status: s.status, notes: s.notes, user_id: user.id
         }))
       )));
+      if (!schPushError) {
+        await db.schedules.where('id').anyOf(pendingSchedules.map(s => s.id)).modify({ synced: true });
+      }
     }
 
-    const { data: remoteSchedules } = await withTimeout<any>(Promise.resolve(supabase.from('schedules').select('*')));
-    if (remoteSchedules) {
-      await db.schedules.bulkPut(remoteSchedules.map((s: any) => ({
-        id: s.id,
-        clientId: s.client_id,
-        scheduledAt: new Date(s.scheduled_at),
-        status: s.status as any,
-        notes: s.notes,
-        user_id: s.user_id
-      })));
+    // PULL Schedules
+    const { data: remoteSch } = await withTimeout<any>(Promise.resolve(supabase.from('schedules').select('*')));
+    if (remoteSch) {
+      for (const rs of remoteSch) {
+        const local = await db.schedules.get(rs.id);
+        if (!local || local.synced !== false) {
+          await db.schedules.put({
+            id: rs.id, clientId: rs.client_id, scheduledAt: new Date(rs.scheduled_at),
+            status: rs.status as any, notes: rs.notes, user_id: rs.user_id, synced: true
+          });
+        }
+      }
     }
 
     // Sync Photos
@@ -233,5 +216,7 @@ export async function syncData() {
     console.log('Sync completed at:', new Date().toLocaleString());
   } catch (err) {
     console.error('Sync unexpected error:', err);
+  } finally {
+    (window as any).isSyncingGlobally = false;
   }
 }

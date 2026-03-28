@@ -42,6 +42,8 @@ export interface Client {
   phone?: string;
   email?: string;
   createdAt: Date;
+  updatedAt?: Date;
+  synced?: boolean;
 }
 
 export interface ChecklistTemplate {
@@ -103,6 +105,8 @@ export interface Inspection {
   dependencyLevel2?: number;
   dependencyLevel3?: number;
   signatureDataUrl?: string;
+  updatedAt?: Date;
+  synced?: boolean;
 }
 
 export type ResponseResult = 'complies' | 'not_complies' | 'not_applicable' | 'not_observed' | 'not_evaluated';
@@ -119,6 +123,7 @@ export interface InspectionResponse {
   photos: InspectionPhoto[];
   createdAt: Date;
   updatedAt: Date;
+  synced?: boolean;
 }
 
 export interface InspectionPhoto {
@@ -174,5 +179,7 @@ export interface Schedule {
   status: 'pending' | 'completed' | 'cancelled';
   notes?: string;
   user_id?: string;
+  updatedAt?: Date;
+  synced?: boolean;
 }
 

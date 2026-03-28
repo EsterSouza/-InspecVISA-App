@@ -19,13 +19,32 @@ export class InspectionDatabase extends Dexie {
 
   constructor() {
     super('InspectionDB');
-    this.version(4).stores({
-      clients:     'id, category, name, city, state, createdAt',
+    this.version(5).stores({
+      clients:     'id, category, name, city, state, createdAt, updatedAt, synced',
       templates:   'id, category',
-      inspections: 'id, clientId, templateId, status, [clientId+status], inspectionDate, completedAt, createdAt',
-      responses:   'id, inspectionId, itemId, result',
+      inspections: 'id, clientId, templateId, status, [clientId+status], inspectionDate, completedAt, createdAt, updatedAt, synced',
+      responses:   'id, inspectionId, itemId, result, updatedAt, synced',
       photos:      'id, responseId',
-      schedules:   'id, clientId, scheduledAt, status'
+      schedules:   'id, clientId, scheduledAt, status, updatedAt, synced'
+    });
+
+    // Auto-manage sync metadata via hooks
+    const tablesToHook = [this.clients, this.inspections, this.responses, this.schedules];
+    tablesToHook.forEach(table => {
+      table.hook('creating', (primaryKey, obj) => {
+        obj.synced = false;
+        obj.updatedAt = new Date();
+      });
+      table.hook('updating', (mods, primKey, obj) => {
+        // If the update itself is setting synced=true (from syncService), don't revert it
+        if (mods.hasOwnProperty('synced')) return;
+        
+        return {
+          ...mods,
+          synced: false,
+          updatedAt: new Date()
+        };
+      });
     });
   }
 }
