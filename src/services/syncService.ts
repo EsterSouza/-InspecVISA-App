@@ -76,6 +76,27 @@ async function safeBatchUpsert(tableName: string, records: any[]): Promise<{ suc
   return { successIds, errors };
 }
 
+async function processPendingDeletions() {
+  const deletions = await db.deletions_sync.toArray();
+  if (deletions.length === 0) return;
+
+  await logSync('info', `Processando ${deletions.length} exclusões pendentes...`);
+  
+  for (const del of deletions) {
+    try {
+      const { error } = await supabase.from(del.table).delete().eq('id', del.recordId);
+      if (!error) {
+        await db.deletions_sync.delete(del.id!);
+      } else if (error.code === 'PGRST116') {
+        // Record already gone from server
+        await db.deletions_sync.delete(del.id!);
+      }
+    } catch (err) {
+      console.warn(`Failed to sync deletion for ${del.table}:${del.recordId}`, err);
+    }
+  }
+}
+
 export async function syncData(isManual: boolean = false) {
   const user = useAuthStore.getState().user;
   if (!user) return;
@@ -88,6 +109,11 @@ export async function syncData(isManual: boolean = false) {
 
   try {
     await logSync('info', 'Iniciando Sincronização Segura...', { manual: isManual });
+
+    // A. Sync Deletions First
+    await processPendingDeletions();
+    const activeDeletions = await db.deletions_sync.toArray();
+    const deletedIds = new Set(activeDeletions.map(d => d.recordId));
 
     // 0. Sync PROFILE / SETTINGS
     const { settings, updateSettings } = (await import('../store/useSettingsStore')).useSettingsStore.getState();
@@ -196,6 +222,7 @@ export async function syncData(isManual: boolean = false) {
     if (cErr) await logSync('error', 'Falha ao baixar Clientes', cErr);
     if (remoteClients) {
       for (const rc of remoteClients) {
+        if (deletedIds.has(rc.id)) continue; // SKIP if deleted locally
         const local = await db.clients.get(rc.id);
         if (!local || local.synced !== 0) {
           await db.clients.put({
@@ -245,6 +272,7 @@ export async function syncData(isManual: boolean = false) {
     if (riErr) await logSync('error', 'Falha ao baixar Inspeções', riErr);
     if (remoteInspec) {
       for (const ri of remoteInspec) {
+        if (deletedIds.has(ri.id)) continue; // SKIP
         const local = await db.inspections.get(ri.id);
         if (!local || local.synced !== 0) {
           await db.inspections.put({
@@ -295,6 +323,7 @@ export async function syncData(isManual: boolean = false) {
     if (rrErr) await logSync('error', 'Falha ao baixar Respostas', rrErr);
     if (remoteRes) {
       for (const rr of remoteRes) {
+        if (deletedIds.has(rr.id)) continue; // SKIP
         const local = await db.responses.get(rr.id);
         if (!local || local.synced !== 0) {
           await db.responses.put({
@@ -333,6 +362,7 @@ export async function syncData(isManual: boolean = false) {
     if (phErr) await logSync('error', 'Falha ao baixar Fotos', phErr);
     if (remotePh) {
       for (const rp of remotePh) {
+        if (deletedIds.has(rp.id)) continue; // SKIP
         const local = await db.photos.get(rp.id);
         if (!local || local.synced !== 0) {
           await db.photos.put({
@@ -393,6 +423,7 @@ export async function syncData(isManual: boolean = false) {
     if (sErr) await logSync('error', 'Falha ao baixar Agendamentos', sErr);
     if (remoteSch) {
       for (const rs of remoteSch) {
+        if (deletedIds.has(rs.id)) continue; // SKIP
         const local = await db.schedules.get(rs.id);
         if (!local || local.synced !== 0) {
           await db.schedules.put({
@@ -400,6 +431,16 @@ export async function syncData(isManual: boolean = false) {
             status: rs.status as any, notes: rs.notes, user_id: rs.user_id, synced: 1
           });
         }
+      }
+    }
+
+    // CLEANUP ORPHANS (The 207 issue)
+    const orphans = await db.responses.filter(r => r.synced === 0).toArray();
+    for (const orphan of orphans) {
+      const parent = await db.inspections.get(orphan.inspectionId);
+      if (!parent) {
+        await logSync('warn', `Removendo resposta órfã (inspeção inexistente): ${orphan.id}`);
+        await db.responses.delete(orphan.id);
       }
     }
 

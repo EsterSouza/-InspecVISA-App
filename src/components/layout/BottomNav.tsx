@@ -1,15 +1,14 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Home, Users, ClipboardCheck, PlusCircle, Settings, RefreshCw, Bug, User, Calendar } from 'lucide-react';
+import { Home, Users, ClipboardCheck, PlusCircle, Settings, RefreshCw, User, Calendar } from 'lucide-react';
 import { useAuthStore } from '../../store/useAuthStore';
 import { syncData } from '../../services/syncService';
 
 const staffNavItems = [
   { to: '/',            icon: Home,          label: 'Início' },
   { to: '/clients',     icon: Users,         label: 'Clientes' },
-  { to: '/new',         icon: PlusCircle,    label: 'Nova', main: true },
   { to: '/inspections', icon: ClipboardCheck,label: 'Inspeções' },
-  { to: '/settings',    icon: Settings,      label: 'Ajustes' },
+  { to: '/new',         icon: PlusCircle,    label: 'Nova', main: true },
 ];
 
 const clientNavItems = [
@@ -71,27 +70,37 @@ export function BottomNav() {
         })}
         
         {/* Mobile Sync Button */}
-        <button
-          onClick={handleManualSync}
-          disabled={isSyncing}
-          className={`flex flex-col items-center justify-center space-y-1 p-2 ${
-            isSyncing ? 'text-primary-600' : 'text-gray-500 hover:text-gray-900'
-          }`}
-        >
-          <RefreshCw className={`h-5 w-5 ${isSyncing ? 'animate-spin text-primary-600' : ''}`} />
-          <span className="text-[10px] font-medium">Sync</span>
-        </button>
+        {!isClient && (
+          <button
+            onClick={handleManualSync}
+            disabled={isSyncing}
+            className={`flex flex-col items-center justify-center space-y-1 p-2 ${
+              isSyncing ? 'text-primary-600' : 'text-gray-500 hover:text-gray-900'
+            }`}
+          >
+            <RefreshCw className={`h-5 w-5 ${isSyncing ? 'animate-spin text-primary-600' : ''}`} />
+            <span className="text-[10px] font-medium">Sync</span>
+          </button>
+        )}
 
-        {/* Secret Debug Link */}
-        <NavLink 
-          to="/debug" 
-          className={({ isActive }) => `flex flex-col items-center justify-center space-y-1 p-2 ${
-            isActive ? 'text-primary-600' : 'text-gray-400 hover:text-gray-600'
-          }`}
-        >
-           <Bug size={18} />
-           <span className="text-[10px] font-medium">Logs</span>
-        </NavLink>
+        {/* Settings/Ajustes moved to last position as requested for staff */}
+        {!isClient && (
+          <NavLink
+            to="/settings"
+            className={({ isActive }) => `flex flex-col items-center justify-center space-y-1 p-2 ${
+              isActive ? 'text-primary-600' : 'text-gray-500 hover:text-gray-900'
+            }`}
+          >
+            {({ isActive }) => (
+              <>
+                <Settings className={`h-5 w-5 ${isActive ? 'fill-primary-50 stroke-primary-600' : ''}`} />
+                <span className={`text-[10px] font-medium ${isActive ? 'font-semibold' : ''}`}>
+                  Ajustes
+                </span>
+              </>
+            )}
+          </NavLink>
+        )}
       </div>
     </nav>
   );

@@ -10,6 +10,13 @@ import type {
 } from '../types';
 import { supabase } from '../lib/supabase';
 
+export interface DeletionSync {
+  id?: number;
+  table: string;
+  recordId: string;
+  timestamp: Date;
+}
+
 export class InspectionDatabase extends Dexie {
   clients!: Table<Client>;
   templates!: Table<ChecklistTemplate>;
@@ -18,17 +25,19 @@ export class InspectionDatabase extends Dexie {
   photos!: Table<InspectionPhoto>;
   schedules!: Table<Schedule>;
   sync_logs!: Table<SyncLog>;
+  deletions_sync!: Table<DeletionSync>;
 
   constructor() {
     super('InspectionDB');
-    this.version(7).stores({
+    this.version(8).stores({
       clients:     'id, category, name, city, state, createdAt, updatedAt, synced',
       templates:   'id, category',
       inspections: 'id, clientId, templateId, status, [clientId+status], inspectionDate, completedAt, createdAt, updatedAt, synced',
       responses:   'id, inspectionId, itemId, result, updatedAt, synced',
       photos:      'id, responseId, synced',
       schedules:   'id, clientId, scheduledAt, status, updatedAt, synced',
-      sync_logs:   '++id, timestamp, level'
+      sync_logs:   '++id, timestamp, level',
+      deletions_sync: '++id, table, recordId'
     });
 
     // Auto-manage sync metadata via hooks
@@ -60,82 +69,75 @@ export async function initializeDatabase(templates: ChecklistTemplate[]) {
   await db.templates.bulkPut(templates);
 }
 
+// Helper to track deletions for sync
+async function trackDeletion(tableName: string, recordId: string) {
+  try {
+    await db.deletions_sync.add({
+      table: tableName,
+      recordId,
+      timestamp: new Date()
+    });
+  } catch (err) {
+    console.warn('Failed to track deletion', err);
+  }
+}
+
 // Recursive deletion of a client and all associated data
 export async function deleteClient(clientId: string) {
-  await db.transaction('rw', [db.clients, db.inspections, db.responses, db.photos, db.schedules], async () => {
-    // 1. Get all inspections for this client
+  await db.transaction('rw', [db.clients, db.inspections, db.responses, db.photos, db.schedules, db.deletions_sync], async () => {
+    // 1. Track client for remote deletion
+    await trackDeletion('clients', clientId);
+
+    // 2. Get and track all inspections
     const clientInspections = await db.inspections.where('clientId').equals(clientId).toArray();
-    const inspectionIds = clientInspections.map(i => i.id);
-
-    if (inspectionIds.length > 0) {
-      // 2. Get all responses for these inspections
-      const responses = await db.responses.where('inspectionId').anyOf(inspectionIds).toArray();
-      const responseIds = responses.map(r => r.id);
-
-      if (responseIds.length > 0) {
-        // 3. Delete all photos for these responses
-        await db.photos.where('responseId').anyOf(responseIds).delete();
-        // 4. Delete all responses
-        await db.responses.bulkDelete(responseIds);
+    for (const inspec of clientInspections) {
+      await trackDeletion('inspections', inspec.id);
+      
+      // 3. Get and track all responses
+      const responses = await db.responses.where('inspectionId').equals(inspec.id).toArray();
+      for (const res of responses) {
+        await trackDeletion('responses', res.id);
+        // Photos are tracked via response or handled by cascade in PG
       }
-
-      // 5. Delete all inspections
-      await db.inspections.bulkDelete(inspectionIds);
+      
+      await db.responses.where('inspectionId').equals(inspec.id).delete();
     }
-
-    // 6. Delete all schedules for this client
+    
+    await db.inspections.where('clientId').equals(clientId).delete();
     await db.schedules.where('clientId').equals(clientId).delete();
-
-    // 7. Delete the client record
     await db.clients.delete(clientId);
   });
 
-  // Attempt to delete from Supabase if online
+  // Opportunistic remote delete
   try {
     await supabase.from('clients').delete().eq('id', clientId);
-    // Also delete inspections, responses and schedules from Supabase
-    // This is optional if RLS handles it, but better be explicit
-    await supabase.from('inspections').delete().eq('client_id', clientId);
-    await supabase.from('schedules').delete().eq('client_id', clientId);
-  } catch (err) {
-    console.warn('Could not sync client deletion to Supabase.', err);
-  }
+  } catch (err) {}
 }
 
 export async function deleteInspection(inspectionId: string) {
-  await db.transaction('readwrite', [db.inspections, db.responses, db.photos], async () => {
-    // 1. Get all responses for this inspection
+  await db.transaction('rw', [db.inspections, db.responses, db.photos, db.deletions_sync], async () => {
+    await trackDeletion('inspections', inspectionId);
+    
     const responses = await db.responses.where('inspectionId').equals(inspectionId).toArray();
-    const responseIds = responses.map(r => r.id);
-
-    // 2. Delete all photos for these responses
-    await db.photos.where('responseId').anyOf(responseIds).delete();
-
-    // 3. Delete responses
-    await db.responses.bulkDelete(responseIds);
-
-    // 4. Delete the inspection
+    for (const res of responses) {
+      await trackDeletion('responses', res.id);
+    }
+    
+    await db.responses.where('inspectionId').equals(inspectionId).delete();
     await db.inspections.delete(inspectionId);
   });
 
-  // Attempt to delete from Supabase if online
   try {
     await supabase.from('inspections').delete().eq('id', inspectionId);
-    // Note: Responses and Photos in Supabase should ideally be deleted too
-    // In a full implementation, we'd have a 'photos' table in PG.
-    await supabase.from('responses').delete().eq('inspection_id', inspectionId);
-  } catch (err) {
-    console.warn('Could not sync inspection deletion to Supabase.', err);
-  }
+  } catch (err) {}
 }
 
 export async function deleteSchedule(scheduleId: string) {
+  await trackDeletion('schedules', scheduleId);
   await db.schedules.delete(scheduleId);
 
-  // Attempt to delete from Supabase if online
   try {
     await supabase.from('schedules').delete().eq('id', scheduleId);
-  } catch (err) {
-    console.warn('Could not sync schedule deletion to Supabase.', err);
-  }
+  } catch (err) {}
 }
+

@@ -133,6 +133,7 @@ export interface InspectionPhoto {
   dataUrl: string; // base64 JPEG
   caption?: string;
   takenAt: Date;
+  updatedAt?: Date;
   synced?: number; // 0=pending, 1=synced
 }
 
