@@ -23,6 +23,47 @@ async function logSync(level: 'info' | 'warn' | 'error', message: string, detail
   }
 }
 
+async function safeBatchUpsert(tableName: string, records: any[]): Promise<{ successIds: string[], errors: any[] }> {
+  if (records.length === 0) return { successIds: [], errors: [] };
+  
+  // Try bulk first
+  const { error: bulkError } = await withTimeout<any>(
+    Promise.resolve(supabase.from(tableName).upsert(records))
+  );
+
+  if (!bulkError) {
+    return { successIds: records.map(r => r.id), errors: [] };
+  }
+
+  // If bulk fails (e.g. FK violation 23503), try 1-by-1
+  await logSync('warn', `Bulk upsert falhou na tabela ${tableName}, processando 1 por 1. Erro:`, bulkError);
+  const successIds: string[] = [];
+  const errors: any[] = [];
+
+  for (const record of records) {
+    const { error } = await withTimeout<any>(
+      Promise.resolve(supabase.from(tableName).upsert([record]))
+    );
+    if (!error) {
+      successIds.push(record.id);
+    } else {
+      errors.push({ id: record.id, error });
+      // Delete orphaned local records immediately to clear deadlock
+      if (error.code === '23503') {
+         await logSync('error', `Registro órfão removido localmente: ${tableName} ID ${record.id}`);
+         try {
+           if (tableName === 'inspections') await db.inspections.delete(record.id);
+           if (tableName === 'responses') await db.responses.delete(record.id);
+           if (tableName === 'photos') await db.photos.delete(record.id);
+           if (tableName === 'schedules') await db.schedules.delete(record.id);
+         } catch(e) {}
+      }
+    }
+  }
+
+  return { successIds, errors };
+}
+
 export async function syncData(isManual: boolean = false) {
   const user = useAuthStore.getState().user;
   if (!user) return;
@@ -138,18 +179,19 @@ export async function syncData(isManual: boolean = false) {
     await logSync('info', `Encontradas ${pendingInspec.length} inspeções pendentes`);
     
     if (pendingInspec.length > 0) {
-      const { error: insPushError } = await withTimeout<any>(Promise.resolve(supabase.from('inspections').upsert(
-        pendingInspec.map(i => ({
-          id: i.id, client_id: i.clientId, template_id: i.templateId,
-          consultant_name: i.consultantName, inspection_date: i.inspectionDate,
-          status: i.status, observations: i.observations, created_at: i.createdAt,
-          completed_at: i.completedAt, user_id: user.id
-        }))
-      )));
-      if (!insPushError) {
-        await db.inspections.where('id').anyOf(pendingInspec.map(i => i.id)).modify({ synced: 1 });
-      } else {
-        await logSync('error', 'Falha ao enviar Inspeções', insPushError);
+      const recordsToPush = pendingInspec.map(i => ({
+        id: i.id, client_id: i.clientId, template_id: i.templateId,
+        consultant_name: i.consultantName, inspection_date: i.inspectionDate,
+        status: i.status, observations: i.observations, created_at: i.createdAt,
+        completed_at: i.completedAt, user_id: user.id
+      }));
+
+      const { successIds, errors } = await safeBatchUpsert('inspections', recordsToPush);
+      if (successIds.length > 0) {
+        await db.inspections.where('id').anyOf(successIds).modify({ synced: 1 });
+      }
+      if (errors.length > 0) {
+        await logSync('error', 'Algumas inspeções falharam ao enviar', errors[0]);
       }
     }
 
@@ -176,18 +218,19 @@ export async function syncData(isManual: boolean = false) {
     await logSync('info', `Encontradas ${pendingResponses.length} respostas pendentes`);
     
     if (pendingResponses.length > 0) {
-      const { error: resPushError } = await withTimeout<any>(Promise.resolve(supabase.from('responses').upsert(
-        pendingResponses.map(r => ({
-          id: r.id, inspection_id: r.inspectionId, item_id: r.itemId,
-          result: r.result, situation_description: r.situationDescription,
-          corrective_action: r.correctiveAction, created_at: r.createdAt,
-          updated_at: r.updatedAt, user_id: user.id
-        }))
-      )));
-      if (!resPushError) {
-        await db.responses.where('id').anyOf(pendingResponses.map(r => r.id)).modify({ synced: 1 });
-      } else {
-        await logSync('error', 'Falha ao enviar Respostas', resPushError);
+      const recordsToPush = pendingResponses.map(r => ({
+        id: r.id, inspection_id: r.inspectionId, item_id: r.itemId,
+        result: r.result, situation_description: r.situationDescription,
+        corrective_action: r.correctiveAction, created_at: r.createdAt,
+        updated_at: r.updatedAt, user_id: user.id
+      }));
+
+      const { successIds, errors } = await safeBatchUpsert('responses', recordsToPush);
+      if (successIds.length > 0) {
+        await db.responses.where('id').anyOf(successIds).modify({ synced: 1 });
+      }
+      if (errors.length > 0) {
+        await logSync('error', 'Algumas respostas falharam ao enviar', errors[0]);
       }
     }
 
@@ -213,17 +256,18 @@ export async function syncData(isManual: boolean = false) {
     await logSync('info', `Encontradas ${pendingPhotos.length} fotos pendentes`);
     
     if (pendingPhotos.length > 0) {
-      const { error: phPushError } = await withTimeout<any>(Promise.resolve(supabase.from('photos').upsert(
-        pendingPhotos.map(p => ({
-          id: p.id, response_id: p.responseId, data_url: p.dataUrl,
-          caption: p.caption, taken_at: p.takenAt, user_id: user.id
-        }))
-      )));
-      if (!phPushError) {
-        await db.photos.where('id').anyOf(pendingPhotos.map(p => p.id)).modify({ synced: 1 });
+      const recordsToPush = pendingPhotos.map(p => ({
+        id: p.id, response_id: p.responseId, data_url: p.dataUrl,
+        caption: p.caption, taken_at: p.takenAt, user_id: user.id
+      }));
+
+      const { successIds, errors } = await safeBatchUpsert('photos', recordsToPush);
+      if (successIds.length > 0) {
+        await db.photos.where('id').anyOf(successIds).modify({ synced: 1 });
         await logSync('info', 'Fotos enviadas com sucesso');
-      } else {
-        await logSync('error', 'Falha ao enviar Fotos', phPushError);
+      }
+      if (errors.length > 0) {
+        await logSync('error', 'Algumas fotos falharam ao enviar', errors[0]);
       }
     }
 
@@ -263,16 +307,27 @@ export async function syncData(isManual: boolean = false) {
     const pendingSchedules = await schQuery.toArray();
     await logSync('info', `Encontrados ${pendingSchedules.length} agendamentos pendentes`);
     if (pendingSchedules.length > 0) {
-      const { error: schPushError } = await withTimeout<any>(Promise.resolve(supabase.from('schedules').upsert(
-        pendingSchedules.map(s => ({
-          id: s.id, client_id: s.clientId, scheduled_at: s.scheduledAt,
-          status: s.status, notes: s.notes, user_id: user.id
-        }))
-      )));
-      if (!schPushError) {
-        await db.schedules.where('id').anyOf(pendingSchedules.map(s => s.id)).modify({ synced: 1 });
-      } else {
-        await logSync('error', 'Falha ao enviar Agendamentos', schPushError);
+      const validSchedules = [];
+      for (const s of pendingSchedules) {
+        const clientExists = await db.clients.get(s.clientId);
+        if (clientExists) validSchedules.push(s);
+        else {
+          await logSync('warn', `Removendo localmente agendamento órfão: ${s.id}`);
+          await db.schedules.delete(s.id);
+        }
+      }
+
+      const recordsToPush = validSchedules.map(s => ({
+        id: s.id, client_id: s.clientId, scheduled_at: s.scheduledAt,
+        status: s.status, notes: s.notes, user_id: user.id
+      }));
+
+      const { successIds, errors } = await safeBatchUpsert('schedules', recordsToPush);
+      if (successIds.length > 0) {
+        await db.schedules.where('id').anyOf(successIds).modify({ synced: 1 });
+      }
+      if (errors.length > 0) {
+        await logSync('error', 'Alguns agendamentos falharam ao enviar', errors[0]);
       }
     }
 
