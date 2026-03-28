@@ -6,9 +6,9 @@ import { useAuthStore } from '../../store/useAuthStore';
 const staffNavItems = [
   { to: '/',            icon: Home,          label: 'Início' },
   { to: '/clients',     icon: Users,         label: 'Clientes' },
-  { to: '/new',         icon: PlusCircle,    label: 'Nova Inspeção', main: true },
+  { to: '/new',         icon: PlusCircle,    label: 'Nova', main: true },
+  { to: '/inspections', icon: ClipboardCheck,label: 'Inspeções' },
   { to: '/schedules',   icon: Calendar,      label: 'Agenda' },
-  { to: '/settings',    icon: Settings,      label: 'Ajustes' },
 ];
 
 const clientNavItems = [

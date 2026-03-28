@@ -2,7 +2,7 @@ import { db } from '../db/database';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/useAuthStore';
 
-const withTimeout = <T>(promise: Promise<T>, ms: number = 15000): Promise<T> => {
+const withTimeout = <T>(promise: Promise<T>, ms: number = 45000): Promise<T> => {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => setTimeout(() => reject(new Error('SYNC_TIMEOUT')), ms))
@@ -42,10 +42,40 @@ export async function syncData(isManual: boolean = false) {
       ? db.clients.filter(c => c.synced !== 1)
       : db.clients.where('synced').equals(0);
     
-    const pendingClients = await clientQuery.toArray();
+    let pendingClients = await clientQuery.toArray();
     await logSync('info', `Encontrados ${pendingClients.length} clientes pendentes`);
     
     if (pendingClients.length > 0) {
+      // -- LOCAL DEDUPLICATION --
+      const localCnpjToId = new Map<string, string>();
+      for (const lc of pendingClients) {
+        if (lc.cnpj) {
+          const canonicalId = localCnpjToId.get(lc.cnpj);
+          if (!canonicalId) {
+            localCnpjToId.set(lc.cnpj, lc.id);
+          } else if (lc.id !== canonicalId) {
+            const canonicalRecord = await db.clients.get(canonicalId);
+            if (canonicalRecord) {
+              let changed = false;
+              if (!canonicalRecord.address && lc.address) { canonicalRecord.address = lc.address; changed = true; }
+              if (!canonicalRecord.city && lc.city) { canonicalRecord.city = lc.city; changed = true; }
+              if (!canonicalRecord.state && lc.state) { canonicalRecord.state = lc.state; changed = true; }
+              if (!canonicalRecord.phone && lc.phone) { canonicalRecord.phone = lc.phone; changed = true; }
+              if (!canonicalRecord.responsibleName && lc.responsibleName) { canonicalRecord.responsibleName = lc.responsibleName; changed = true; }
+              if (changed) await db.clients.put(canonicalRecord);
+            }
+            await logSync('info', `Deduplicando localmente: ${lc.name}`);
+            await db.inspections.where({ clientId: lc.id }).modify({ clientId: canonicalId });
+            await db.schedules.where({ clientId: lc.id }).modify({ clientId: canonicalId });
+            await db.clients.delete(lc.id);
+          }
+        }
+      }
+
+      // Refresh pending clients list after local dedup
+      pendingClients = await clientQuery.toArray();
+
+      // -- REMOTE DEDUPLICATION --
       const { data: remoteCnpjData, error: cnpjErr } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('id, cnpj')));
       if (cnpjErr) await logSync('warn', 'Erro ao buscar CNPJs para merge', cnpjErr);
       
@@ -57,11 +87,10 @@ export async function syncData(isManual: boolean = false) {
         if (localClient.cnpj && remoteCnpjMap.has(localClient.cnpj)) {
           const canonicalRemoteId = remoteCnpjMap.get(localClient.cnpj)!;
           if (localClient.id !== canonicalRemoteId) {
-            const oldId = localClient.id;
-            await logSync('info', `Mesclando cliente duplicado: ${oldId} -> ${canonicalRemoteId}`);
-            await db.inspections.where({ clientId: oldId }).modify({ clientId: canonicalRemoteId });
-            await db.schedules.where({ clientId: oldId }).modify({ clientId: canonicalRemoteId });
-            await db.clients.delete(oldId);
+            await logSync('info', `Mesclando cliente com a nuvem: ${localClient.name}`);
+            await db.inspections.where({ clientId: localClient.id }).modify({ clientId: canonicalRemoteId });
+            await db.schedules.where({ clientId: localClient.id }).modify({ clientId: canonicalRemoteId });
+            await db.clients.delete(localClient.id);
             localClient.id = canonicalRemoteId;
             await db.clients.put(localClient);
           }
@@ -162,7 +191,7 @@ export async function syncData(isManual: boolean = false) {
       }
     }
 
-    const { data: remoteRes, error: rrErr } = await withTimeout<any>(Promise.resolve(supabase.from('responses').select('*')), 25000);
+    const { data: remoteRes, error: rrErr } = await withTimeout<any>(Promise.resolve(supabase.from('responses').select('*')), 60000);
     if (rrErr) await logSync('error', 'Falha ao baixar Respostas', rrErr);
     if (remoteRes) {
       for (const rr of remoteRes) {
@@ -212,7 +241,24 @@ export async function syncData(isManual: boolean = false) {
       }
     }
 
-    // 5. Sync SCHEDULES
+    // 5. Sync SCHEDULES & AUTO-LINK
+    // Auto-link: find pending schedules that match an inspection today
+    const activeSchedules = await db.schedules.filter(s => s.status === 'pending').toArray();
+    if (activeSchedules.length > 0) {
+      const allInspections = await db.inspections.toArray();
+      for (const schedule of activeSchedules) {
+        const sDate = new Date(schedule.scheduledAt).toISOString().split('T')[0];
+        const matchingInspec = allInspections.find(i => 
+          i.clientId === schedule.clientId && 
+          new Date(i.inspectionDate).toISOString().split('T')[0] === sDate
+        );
+        if (matchingInspec) {
+          await logSync('info', `Agendamento detectado como realizado automaticamente`);
+          await db.schedules.update(schedule.id, { status: 'completed' });
+        }
+      }
+    }
+
     const schQuery = isManual ? db.schedules.filter(s => s.synced !== 1) : db.schedules.where('synced').equals(0);
     const pendingSchedules = await schQuery.toArray();
     await logSync('info', `Encontrados ${pendingSchedules.length} agendamentos pendentes`);

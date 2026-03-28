@@ -7,7 +7,7 @@ import type { Inspection, InspectionResponse, ChecklistItem, Schedule } from '..
 import { Button } from '../components/ui/Button';
 import { Card, CardContent } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
-import { PlusCircle, ClipboardCheck, ArrowRight, Activity, TrendingUp, AlertTriangle, Calendar, Clock } from 'lucide-react';
+import { PlusCircle, ClipboardCheck, ArrowRight, Activity, TrendingUp, AlertTriangle, Calendar, Clock, Settings } from 'lucide-react';
 import { formatDateTime } from '../utils/imageUtils';
 import { calculateScore } from '../utils/scoring';
 import { getTemplates } from '../data/templates';
@@ -109,7 +109,11 @@ export function Dashboard() {
             Bem-vinda ao InspecVISA. O que você deseja inspecionar hoje?
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+           <Button variant="outline" onClick={() => navigate('/settings')} className="h-14 lg:hidden">
+             <Settings className="mr-2 h-5 w-5" />
+             Ajustes
+           </Button>
            <Button variant="outline" onClick={() => navigate('/schedules')} className="h-14">
              <Calendar className="mr-2 h-5 w-5" />
              Agenda
