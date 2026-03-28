@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, FileCheck2, Loader2, PlusCircle, Info, Users2 } from 'lucide-react';
+import { ArrowLeft, Save, FileCheck2, Loader2, PlusCircle, Info, Users2, WifiOff } from 'lucide-react';
 import { db } from '../db/database';
 import { getTemplateById, enrichTemplate } from '../data/templates';
 import { FOOD_SEGMENT_LABELS, type FoodEstablishmentType } from '../types';
@@ -28,6 +28,17 @@ export function InspectionExecution() {
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [prevNCIds, setPrevNCIds] = useState<string[]>([]);
   const [expandedSectionIds, setExpandedSectionIds] = useState<string[]>([]);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const updateOnlineStatus = () => setIsOnline(navigator.onLine);
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    return () => {
+      window.removeEventListener('online', updateOnlineStatus);
+      window.removeEventListener('offline', updateOnlineStatus);
+    };
+  }, []);
 
   // Load inspection on mount
   useEffect(() => {
@@ -305,18 +316,21 @@ export function InspectionExecution() {
               <div className="flex items-center space-x-2 text-xs text-gray-500">
                 <span className="uppercase text-primary-600 font-semibold">{currentInspection.clientCategory}</span>
                 <span>•</span>
-                {saveStatus === 'saving' && <span className="flex items-center text-primary-600"><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Salvando...</span>}
-                {saveStatus === 'saved' && <span className="flex items-center text-green-600"><Save className="mr-1 h-3 w-3" /> Salvo</span>}
-                {saveStatus === 'idle' && <span>{formatDateTime(new Date())}</span>}
+                {!isOnline && <span className="flex items-center text-amber-600 font-bold"><WifiOff className="mr-1 h-3 w-3" /> OFFLINE</span>}
+                {isOnline && saveStatus === 'saving' && <span className="flex items-center text-primary-600"><Loader2 className="mr-1 h-3 w-3 animate-spin" /> Salvando...</span>}
+                {isOnline && saveStatus === 'saved' && <span className="flex items-center text-green-600"><Save className="mr-1 h-3 w-3" /> Salvo</span>}
+                {isOnline && saveStatus === 'idle' && <span>{formatDateTime(new Date())}</span>}
               </div>
             </div>
           </div>
           <Button 
             onClick={finishInspection}
             className="shadow-sm"
+            disabled={!isOnline}
+            variant={isOnline ? 'default' : 'outline'}
           >
             <FileCheck2 className="mr-2 h-4 w-4 hidden sm:block" />
-            Finalizar
+            {isOnline ? 'Finalizar' : 'Offline'}
           </Button>
         </div>
       </header>

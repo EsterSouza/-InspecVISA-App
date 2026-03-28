@@ -10,6 +10,8 @@ import { Modal } from '../components/ui/Modal';
 import { generateId } from '../utils/imageUtils';
 
 import { useNavigate } from 'react-router-dom';
+import { syncClientsOnly } from '../services/syncService';
+import { Loader2, WifiOff } from 'lucide-react';
 
 export function Clients() {
   const navigate = useNavigate();
@@ -18,6 +20,9 @@ export function Clients() {
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState<ClientCategory | 'all'>('all');
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+  
   const { register, handleSubmit, watch, reset, formState: { errors } } = useForm<Client>();
 
   const loadClients = async () => {
@@ -34,6 +39,26 @@ export function Clients() {
   };
 
   useEffect(() => { loadClients(); }, [search, filterCat]);
+
+  useEffect(() => {
+    const handleSync = async () => {
+      if (isOnline) {
+        setIsSyncing(true);
+        await syncClientsOnly();
+        await loadClients();
+        setIsSyncing(false);
+      }
+    };
+    handleSync();
+
+    const updateOnlineStatus = () => setIsOnline(navigator.onLine);
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    return () => {
+      window.removeEventListener('online', updateOnlineStatus);
+      window.removeEventListener('offline', updateOnlineStatus);
+    };
+  }, [isOnline]);
 
   const onSubmit = async (data: Client) => {
     try {
@@ -113,10 +138,29 @@ export function Clients() {
           <h1 className="text-2xl font-bold text-gray-900">Clientes</h1>
           <p className="text-sm text-gray-500">Gerencie seus estabelecimentos.</p>
         </div>
-        <Button onClick={() => setIsModalOpen(true)} className="w-full sm:w-auto">
-          <Plus className="mr-2 h-5 w-5" />
-          Novo Cliente
-        </Button>
+        <div className="flex items-center gap-3">
+          {isSyncing && (
+            <div className="flex items-center text-primary-600 text-sm font-medium animate-pulse">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              Sincronizando...
+            </div>
+          )}
+          {!isOnline && (
+            <div className="flex items-center text-amber-600 text-sm font-medium">
+              <WifiOff className="mr-2 h-4 w-4" />
+              Offline
+            </div>
+          )}
+          <Button 
+            onClick={() => setIsModalOpen(true)} 
+            className="w-full sm:w-auto"
+            disabled={!isOnline}
+            title={!isOnline ? "Conecte-se à internet para cadastrar novos clientes" : ""}
+          >
+            <Plus className="mr-2 h-5 w-5" />
+            Novo Cliente
+          </Button>
+        </div>
       </div>
 
       <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -333,7 +377,13 @@ export function Clients() {
 
           <div className="mt-6 flex justify-end space-x-3 pt-4 border-t border-gray-100">
             <Button variant="outline" type="button" onClick={() => setIsModalOpen(false)}>Cancelar</Button>
-            <Button type="submit" form="client-form">Salvar Cliente</Button>
+            <Button 
+              type="submit" 
+              form="client-form"
+              disabled={!isOnline}
+            >
+              {isOnline ? 'Salvar Cliente' : 'Sem Internet'}
+            </Button>
           </div>
         </form>
       </Modal>

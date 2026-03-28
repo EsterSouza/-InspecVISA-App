@@ -64,6 +64,43 @@ async function safeBatchUpsert(tableName: string, records: any[]): Promise<{ suc
   return { successIds, errors };
 }
 
+/**
+ * Remove registros locais cujos pais não existem mais (Evita FK Violation no Supabase)
+ */
+async function cleanupOrphans() {
+  await logSync('info', 'Limpando registros órfãos locais...');
+  
+  // 1. Respostas sem Inspeção
+  const responses = await db.responses.toArray();
+  for (const r of responses) {
+    const parent = await db.inspections.get(r.inspectionId);
+    if (!parent) {
+      await db.responses.delete(r.id);
+      await logSync('warn', `Removida resposta órfã: ${r.id} (Inspeção ausente)`);
+    }
+  }
+
+  // 2. Fotos sem Resposta
+  const photos = await db.photos.toArray();
+  for (const p of photos) {
+    const parent = await db.responses.get(p.responseId);
+    if (!parent) {
+      await db.photos.delete(p.id);
+      await logSync('warn', `Removida foto órfã: ${p.id} (Resposta ausente)`);
+    }
+  }
+
+  // 3. Inspeções sem Cliente
+  const inspections = await db.inspections.toArray();
+  for (const i of inspections) {
+    const parent = await db.clients.get(i.clientId);
+    if (!parent) {
+      await db.inspections.delete(i.id);
+      await logSync('warn', `Removida inspeção órfã: ${i.id} (Cliente ausente)`);
+    }
+  }
+}
+
 async function processPendingDeletions() {
   const deletions = await db.deletions_sync.toArray();
   if (deletions.length === 0) return;
@@ -98,6 +135,9 @@ export async function syncData(isManual: boolean = false) {
   try {
     await logSync('info', 'Iniciando Sincronização Segura...', { manual: isManual });
 
+    // 0. Cleanup Orphans
+    await cleanupOrphans();
+
     // A. Sync Deletions First
     await processPendingDeletions();
     const activeDeletions = await db.deletions_sync.toArray();
@@ -124,6 +164,7 @@ export async function syncData(isManual: boolean = false) {
     let pendingClients = await clientQuery.toArray();
     
     if (pendingClients.length > 0) {
+      await logSync('info', `Enviando ${pendingClients.length} clientes pendentes...`);
       // -- LOCAL DEDUPLICATION --
       const localCnpjToId = new Map<string, string>();
       for (const lc of pendingClients) {
@@ -140,7 +181,10 @@ export async function syncData(isManual: boolean = false) {
               if (!canonicalRecord.state && lc.state) { canonicalRecord.state = lc.state; changed = true; }
               if (!canonicalRecord.phone && lc.phone) { canonicalRecord.phone = lc.phone; changed = true; }
               if (!canonicalRecord.responsibleName && lc.responsibleName) { canonicalRecord.responsibleName = lc.responsibleName; changed = true; }
-              if (changed) await db.clients.put(canonicalRecord);
+              if (changed) {
+                canonicalRecord.updatedAt = new Date();
+                await db.clients.put(canonicalRecord);
+              }
             }
             await logSync('info', `Deduplicando localmente: ${lc.name}`);
             await db.inspections.where({ clientId: lc.id }).modify({ clientId: canonicalId });
@@ -153,7 +197,7 @@ export async function syncData(isManual: boolean = false) {
       pendingClients = await clientQuery.toArray();
 
       // -- REMOTE DEDUPLICATION (CNPJ Merge) --
-      const { data: remoteCnpjData } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('id, cnpj').limit(1000)));
+      const { data: remoteCnpjData } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('id, cnpj')));
       const remoteCnpjMap = new Map<string, string>(
         remoteCnpjData?.filter((c: any) => c.cnpj).map((c: any) => [c.cnpj, c.id]) || []
       );
@@ -162,7 +206,7 @@ export async function syncData(isManual: boolean = false) {
         if (localClient.cnpj && remoteCnpjMap.has(localClient.cnpj)) {
           const canonicalRemoteId = remoteCnpjMap.get(localClient.cnpj)!;
           if (localClient.id !== canonicalRemoteId) {
-            await logSync('info', `Mesclando cliente com a nuvem: ${localClient.name}`);
+            await logSync('info', `Mesclando cliente com a nuvem (CNPJ duplicado): ${localClient.name}`);
             await db.inspections.where({ clientId: localClient.id }).modify({ clientId: canonicalRemoteId });
             await db.schedules.where({ clientId: localClient.id }).modify({ clientId: canonicalRemoteId });
             await db.clients.delete(localClient.id);
@@ -173,9 +217,18 @@ export async function syncData(isManual: boolean = false) {
       }
 
       const clientsToPush = (await clientQuery.toArray()).map(c => ({
-        id: c.id, name: c.name, cnpj: c.cnpj, address: c.address, category: c.category,
-        food_types: c.foodTypes, responsible_name: c.responsibleName, phone: c.phone,
-        email: c.email, created_at: c.createdAt, user_id: user.id
+        id: c.id, 
+        name: c.name, 
+        cnpj: c.cnpj, 
+        address: c.address, 
+        category: c.category,
+        food_types: c.foodTypes, 
+        responsible_name: c.responsibleName, 
+        phone: c.phone,
+        email: c.email, 
+        created_at: c.createdAt, 
+        updated_at: c.updatedAt || new Date(),
+        user_id: user.id
       }));
 
       const { error: pushError } = await withTimeout<any>(Promise.resolve(supabase.from('clients').upsert(clientsToPush)));
@@ -183,26 +236,40 @@ export async function syncData(isManual: boolean = false) {
         await db.clients.where('id').anyOf(pendingClients.map(c => c.id)).modify({ synced: 1 });
         await logSync('info', 'Clientes enviados com sucesso');
       } else {
-        await logSync('error', 'Falha ao enviar Clientes. Abortando sync para evitar perda de dados.', pushError);
+        await logSync('error', 'Falha ao enviar Clientes. Abortando sync para evitar erros de integridade (FK VIOLATION).', pushError);
         (window as any).isSyncingGlobally = false;
-        return; // CRITICAL ABORT
+        return; // CRITICAL ABORT: If clients don't push, inspections will fail due to FK
       }
     }
 
     // 1. PULL CLIENTS
-    const { data: remoteClients, error: cErr } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('*').limit(1000)));
+    const { data: remoteClients, error: cErr } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('*')));
     if (cErr) await logSync('error', 'Falha ao baixar Clientes', cErr);
     if (remoteClients) {
       await logSync('info', `Baixados ${remoteClients.length} clientes da nuvem`);
       for (const rc of remoteClients) {
         if (deletedIds.has(rc.id)) continue;
         const local = await db.clients.get(rc.id);
-        if (!local || local.synced !== 0) {
+        
+        // Robust Overwrite: Se não existe local OU o remoto é mais novo que o local
+        const serverUpdate = new Date(rc.updated_at || rc.created_at);
+        const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : new Date(0);
+
+        if (!local || serverUpdate > localUpdate || (local.synced === 1)) {
           await db.clients.put({
-            id: rc.id, name: rc.name, cnpj: rc.cnpj, address: rc.address,
-            category: rc.category as any, foodTypes: rc.food_types,
-            responsibleName: rc.responsible_name, phone: rc.phone, email: rc.email,
-            createdAt: new Date(rc.created_at), city: rc.city, state: rc.state,
+            id: rc.id, 
+            name: rc.name, 
+            cnpj: rc.cnpj, 
+            address: rc.address,
+            category: rc.category as any, 
+            foodTypes: rc.food_types,
+            responsibleName: rc.responsible_name, 
+            phone: rc.phone, 
+            email: rc.email,
+            createdAt: new Date(rc.created_at), 
+            updatedAt: serverUpdate,
+            city: rc.city, 
+            state: rc.state,
             synced: 1
           });
         }
@@ -338,23 +405,57 @@ export async function syncData(isManual: boolean = false) {
       }
     }
 
-    // CLEANUP ORPHANS (The 200+ responses issue)
-    const orphans = await db.responses.filter(r => r.synced === 0).toArray();
-    let orphanCount = 0;
-    for (const orphan of orphans) {
-      const parent = await db.inspections.get(orphan.inspectionId);
-      if (!parent) {
-        await db.responses.delete(orphan.id);
-        orphanCount++;
-      }
-    }
-    if (orphanCount > 0) await logSync('info', `Limpeza concluída: ${orphanCount} respostas órfãs removidas.`);
+    // Os órfãos agora são limpos no início do sync
 
     await logSync('info', 'Sincronização concluída com sucesso');
     if (isManual) alert('Sincronização concluída!');
   } catch (err: any) {
     await logSync('error', 'Erro inesperado na sincronização', err?.message || err);
     if (isManual) alert('Erro na sincronização: ' + (err?.message || err));
+  } finally {
+    (window as any).isSyncingGlobally = false;
+  }
+}
+
+/**
+ * Sync especializado apenas para Clientes (rápido)
+ */
+export async function syncClientsOnly() {
+  const user = useAuthStore.getState().user;
+  if (!user || (window as any).isSyncingGlobally) return;
+  
+  (window as any).isSyncingGlobally = true;
+  try {
+    await logSync('info', 'Iniciando sync rápido de clientes...');
+    
+    // A. Sync Deletions First
+    await processPendingDeletions();
+    const activeDeletions = await db.deletions_sync.toArray();
+    const deletedIds = new Set(activeDeletions.map(d => d.recordId));
+
+    // B. PULL CLIENTS
+    const { data: remoteClients, error: cErr } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('*')));
+    if (remoteClients) {
+      for (const rc of remoteClients) {
+        if (deletedIds.has(rc.id)) continue;
+        const local = await db.clients.get(rc.id);
+        const serverUpdate = new Date(rc.updated_at || rc.created_at);
+        const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : new Date(0);
+
+        if (!local || serverUpdate > localUpdate) {
+          await db.clients.put({
+            id: rc.id, name: rc.name, cnpj: rc.cnpj, address: rc.address,
+            category: rc.category as any, foodTypes: rc.food_types,
+            responsibleName: rc.responsible_name, phone: rc.phone, email: rc.email,
+            createdAt: new Date(rc.created_at), updatedAt: serverUpdate,
+            city: rc.city, state: rc.state, synced: 1
+          });
+        }
+      }
+    }
+    await logSync('info', 'Sync rápido de clientes concluído.');
+  } catch (err) {
+    console.error('Failed fast sync', err);
   } finally {
     (window as any).isSyncingGlobally = false;
   }

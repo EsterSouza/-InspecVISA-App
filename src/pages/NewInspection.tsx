@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ChevronRight, ArrowLeft } from 'lucide-react';
+import { ChevronRight, ArrowLeft, WifiOff } from 'lucide-react';
 import { db } from '../db/database';
 import { useSettingsStore } from '../store/useSettingsStore';
 import type { Client, ChecklistTemplate } from '../types';
@@ -35,6 +35,17 @@ export function NewInspection() {
   const [dep3, setDep3] = useState('');
 
   const [inspectionDate, setInspectionDate] = useState(new Date().toISOString().split('T')[0]);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const updateOnlineStatus = () => setIsOnline(navigator.onLine);
+    window.addEventListener('online', updateOnlineStatus);
+    window.addEventListener('offline', updateOnlineStatus);
+    return () => {
+      window.removeEventListener('online', updateOnlineStatus);
+      window.removeEventListener('offline', updateOnlineStatus);
+    };
+  }, []);
 
   useEffect(() => {
     const init = async () => {
@@ -308,12 +319,23 @@ export function NewInspection() {
                </div>
              </div>
 
-             <div className="flex flex-col sm:flex-row justify-between gap-4 pt-4">
-               <Button variant="outline" onClick={() => setStep(2)}>Voltar</Button>
-               <Button onClick={handleStart} className="bg-primary-600 hover:bg-primary-700 text-lg py-6 px-8 h-auto shadow-xl w-full sm:w-auto">
-                 INICIAR INSPEÇÃO
-               </Button>
-             </div>
+              <div className="flex flex-col sm:flex-row justify-between gap-4 pt-4">
+                <Button variant="outline" onClick={() => setStep(2)}>Voltar</Button>
+                <div className="flex flex-col items-end gap-2">
+                  {!isOnline && (
+                    <span className="text-amber-600 text-xs font-bold flex items-center">
+                      <WifiOff className="mr-1 h-3 w-3" /> CONECTE-SE PARA INICIAR
+                    </span>
+                  )}
+                  <Button 
+                    onClick={handleStart} 
+                    disabled={!isOnline}
+                    className="bg-primary-600 hover:bg-primary-700 text-lg py-6 px-8 h-auto shadow-xl w-full sm:w-auto"
+                  >
+                    {isOnline ? 'INICIAR INSPEÇÃO' : 'FORA DE LINHA'}
+                  </Button>
+                </div>
+              </div>
            </div>
         )}
       </div>

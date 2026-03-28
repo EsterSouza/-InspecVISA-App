@@ -68,11 +68,18 @@ function App() {
 
     // Trigger on network reconnect
     window.addEventListener('online', backgroundSync);
-    // Trigger automatically every 5 minutes
-    const interval = setInterval(backgroundSync, 5 * 60 * 1000);
+    // Trigger on app visibility change (back from background)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') backgroundSync();
+    };
+    window.addEventListener('visibilitychange', handleVisibility);
+
+    // Trigger automatically every 2 minutes
+    const interval = setInterval(backgroundSync, 2 * 60 * 1000);
 
     return () => {
       window.removeEventListener('online', backgroundSync);
+      window.removeEventListener('visibilitychange', handleVisibility);
       clearInterval(interval);
     };
   }, [initialized, user]);
