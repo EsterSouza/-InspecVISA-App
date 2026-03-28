@@ -21,18 +21,18 @@ export class InspectionDatabase extends Dexie {
 
   constructor() {
     super('InspectionDB');
-    this.version(6).stores({
+    this.version(7).stores({
       clients:     'id, category, name, city, state, createdAt, updatedAt, synced',
       templates:   'id, category',
       inspections: 'id, clientId, templateId, status, [clientId+status], inspectionDate, completedAt, createdAt, updatedAt, synced',
       responses:   'id, inspectionId, itemId, result, updatedAt, synced',
-      photos:      'id, responseId',
+      photos:      'id, responseId, synced',
       schedules:   'id, clientId, scheduledAt, status, updatedAt, synced',
       sync_logs:   '++id, timestamp, level'
     });
 
     // Auto-manage sync metadata via hooks
-    const tablesToHook = [this.clients, this.inspections, this.responses, this.schedules];
+    const tablesToHook = [this.clients, this.inspections, this.responses, this.schedules, this.photos];
     tablesToHook.forEach(table => {
       table.hook('creating', (primaryKey, obj) => {
         obj.synced = 0; // 0 = pending
