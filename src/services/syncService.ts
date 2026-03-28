@@ -33,7 +33,6 @@ async function safeBatchUpsert(tableName: string, records: any[]): Promise<{ suc
   for (let i = 0; i < records.length; i += CHUNK_SIZE) {
     const chunk = records.slice(i, i + CHUNK_SIZE);
     
-    // Try bulk for the chunk
     const { error: bulkError } = await withTimeout<any>(
       Promise.resolve(supabase.from(tableName).upsert(chunk))
     );
@@ -43,7 +42,6 @@ async function safeBatchUpsert(tableName: string, records: any[]): Promise<{ suc
       continue;
     }
 
-    // If chunk fails, try 1-by-1 for this chunk
     await logSync('warn', `Chunk upsert falhou na tabela ${tableName}, processando 1 por 1. Erro:`, bulkError);
     
     for (const record of chunk) {
@@ -54,20 +52,10 @@ async function safeBatchUpsert(tableName: string, records: any[]): Promise<{ suc
         successIds.push(record.id);
       } else {
         errors.push({ id: record.id, error });
-        // Handle FK violation 23503
+        // Handle FK violation 23503 - Log it, but don't delete locally anymore to avoid data loss
+        // Data loss happens if client sync fails but others continue.
         if (error.code === '23503') {
-           if (tableName === 'photos') {
-             // For photos, just SKIP and wait for the response to sync. Do NOT delete.
-             await logSync('warn', `Aguardando resposta pai para a foto: ${record.id}`);
-           } else {
-             // For others, delete orphaned local records if they are truly invalid
-             await logSync('error', `Registro órfão removido localmente: ${tableName} ID ${record.id}`);
-             try {
-               if (tableName === 'inspections') await db.inspections.delete(record.id);
-               if (tableName === 'responses') await db.responses.delete(record.id);
-               if (tableName === 'schedules') await db.schedules.delete(record.id);
-             } catch(e) {}
-           }
+           await logSync('error', `FK Violation on ${tableName} ID ${record.id}: Parent record missing on server.`);
         }
       }
     }
@@ -87,7 +75,7 @@ async function processPendingDeletions() {
       const { error } = await supabase.from(del.table).delete().eq('id', del.recordId);
       if (!error) {
         await db.deletions_sync.delete(del.id!);
-      } else if (error.code === 'PGRST116') {
+      } else if (error.code === 'PGRST116' || error.code === '404') {
         // Record already gone from server
         await db.deletions_sync.delete(del.id!);
       }
@@ -126,27 +114,14 @@ export async function syncData(isManual: boolean = false) {
         consultant_role: settings.consultantRole,
         updated_at: new Date()
       });
-    } else {
-      // Pull if local is empty (e.g. cache cleared)
-      const { data: profData } = await supabase.from('profiles').select('*').eq('id', user.id).single();
-      if (profData) {
-        updateSettings({
-          name: profData.name,
-          consultantRole: profData.consultant_role,
-          professionalId: profData.coren,
-          phone: profData.phone,
-        });
-      }
     }
 
-    // 1. Sync CLIENTS
-    // Fallback for isManual: catch anything not synced=1
+    // 1. Sync CLIENTS (PUSH)
     const clientQuery = isManual 
       ? db.clients.filter(c => c.synced !== 1)
       : db.clients.where('synced').equals(0);
     
     let pendingClients = await clientQuery.toArray();
-    await logSync('info', `Encontrados ${pendingClients.length} clientes pendentes`);
     
     if (pendingClients.length > 0) {
       // -- LOCAL DEDUPLICATION --
@@ -175,13 +150,10 @@ export async function syncData(isManual: boolean = false) {
         }
       }
 
-      // Refresh pending clients list after local dedup
       pendingClients = await clientQuery.toArray();
 
-      // -- REMOTE DEDUPLICATION --
-      const { data: remoteCnpjData, error: cnpjErr } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('id, cnpj')));
-      if (cnpjErr) await logSync('warn', 'Erro ao buscar CNPJs para merge', cnpjErr);
-      
+      // -- REMOTE DEDUPLICATION (CNPJ Merge) --
+      const { data: remoteCnpjData } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('id, cnpj').limit(1000)));
       const remoteCnpjMap = new Map<string, string>(
         remoteCnpjData?.filter((c: any) => c.cnpj).map((c: any) => [c.cnpj, c.id]) || []
       );
@@ -200,29 +172,30 @@ export async function syncData(isManual: boolean = false) {
         }
       }
 
-      const clientsToPush = await clientQuery.toArray();
-      const { error: pushError } = await withTimeout<any>(Promise.resolve(supabase.from('clients').upsert(
-        clientsToPush.map(c => ({
-          id: c.id, name: c.name, cnpj: c.cnpj, address: c.address, category: c.category,
-          food_types: c.foodTypes, responsible_name: c.responsibleName, phone: c.phone,
-          email: c.email, created_at: c.createdAt, user_id: user.id
-        }))
-      )));
-      
+      const clientsToPush = (await clientQuery.toArray()).map(c => ({
+        id: c.id, name: c.name, cnpj: c.cnpj, address: c.address, category: c.category,
+        food_types: c.foodTypes, responsible_name: c.responsibleName, phone: c.phone,
+        email: c.email, created_at: c.createdAt, user_id: user.id
+      }));
+
+      const { error: pushError } = await withTimeout<any>(Promise.resolve(supabase.from('clients').upsert(clientsToPush)));
       if (!pushError) {
-        await db.clients.where('id').anyOf(clientsToPush.map(c => c.id)).modify({ synced: 1 });
+        await db.clients.where('id').anyOf(pendingClients.map(c => c.id)).modify({ synced: 1 });
         await logSync('info', 'Clientes enviados com sucesso');
       } else {
-        await logSync('error', 'Falha ao enviar Clientes', pushError);
+        await logSync('error', 'Falha ao enviar Clientes. Abortando sync para evitar perda de dados.', pushError);
+        (window as any).isSyncingGlobally = false;
+        return; // CRITICAL ABORT
       }
     }
 
-    // PULL Clients
-    const { data: remoteClients, error: cErr } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('*')));
+    // 1. PULL CLIENTS
+    const { data: remoteClients, error: cErr } = await withTimeout<any>(Promise.resolve(supabase.from('clients').select('*').limit(1000)));
     if (cErr) await logSync('error', 'Falha ao baixar Clientes', cErr);
     if (remoteClients) {
+      await logSync('info', `Baixados ${remoteClients.length} clientes da nuvem`);
       for (const rc of remoteClients) {
-        if (deletedIds.has(rc.id)) continue; // SKIP if deleted locally
+        if (deletedIds.has(rc.id)) continue;
         const local = await db.clients.get(rc.id);
         if (!local || local.synced !== 0) {
           await db.clients.put({
@@ -236,43 +209,31 @@ export async function syncData(isManual: boolean = false) {
       }
     }
 
-    // 2. Sync INSPECTIONS
+    // 2. Sync INSPECTIONS (PUSH)
     const inspecQuery = isManual ? db.inspections.filter(i => i.synced !== 1) : db.inspections.where('synced').equals(0);
     const pendingInspec = await inspecQuery.toArray();
-    await logSync('info', `Encontradas ${pendingInspec.length} inspeções pendentes`);
-    
     if (pendingInspec.length > 0) {
       const recordsToPush = pendingInspec.map(i => ({
         id: i.id, client_id: i.clientId, template_id: i.templateId,
         consultant_name: i.consultantName, inspection_date: i.inspectionDate,
         status: i.status, observations: i.observations, created_at: i.createdAt,
         completed_at: i.completedAt, user_id: user.id,
-        ilpi_capacity: i.ilpiCapacity,
-        residents_total: i.residentsTotal,
-        residents_male: i.residentsMale,
-        residents_female: i.residentsFemale,
-        dependency_level1: i.dependencyLevel1,
-        dependency_level2: i.dependencyLevel2,
-        dependency_level3: i.dependencyLevel3,
-        accompanist_name: i.accompanistName,
-        accompanist_role: i.accompanistRole,
-        signature_data_url: i.signatureDataUrl
+        ilpi_capacity: i.ilpiCapacity, residents_total: i.residentsTotal,
+        residents_male: i.residentsMale, residents_female: i.residentsFemale,
+        dependency_level1: i.dependencyLevel1, dependency_level2: i.dependencyLevel2,
+        dependency_level3: i.dependencyLevel3, accompanist_name: i.accompanistName,
+        accompanist_role: i.accompanistRole, signature_data_url: i.signatureDataUrl
       }));
-
       const { successIds, errors } = await safeBatchUpsert('inspections', recordsToPush);
-      if (successIds.length > 0) {
-        await db.inspections.where('id').anyOf(successIds).modify({ synced: 1 });
-      }
-      if (errors.length > 0) {
-        await logSync('error', 'Algumas inspeções falharam ao enviar', errors[0]);
-      }
+      if (successIds.length > 0) await db.inspections.where('id').anyOf(successIds).modify({ synced: 1 });
+      if (errors.length > 0) await logSync('error', 'Falha em algumas inspeções', errors[0].error);
     }
 
-    const { data: remoteInspec, error: riErr } = await withTimeout<any>(Promise.resolve(supabase.from('inspections').select('*')));
-    if (riErr) await logSync('error', 'Falha ao baixar Inspeções', riErr);
+    // 2. PULL INSPECTIONS
+    const { data: remoteInspec } = await withTimeout<any>(Promise.resolve(supabase.from('inspections').select('*').limit(1000)));
     if (remoteInspec) {
       for (const ri of remoteInspec) {
-        if (deletedIds.has(ri.id)) continue; // SKIP
+        if (deletedIds.has(ri.id)) continue;
         const local = await db.inspections.get(ri.id);
         if (!local || local.synced !== 0) {
           await db.inspections.put({
@@ -281,49 +242,35 @@ export async function syncData(isManual: boolean = false) {
             status: ri.status as any, observations: ri.observations,
             createdAt: new Date(ri.created_at), synced: 1,
             completedAt: ri.completed_at ? new Date(ri.completed_at) : undefined,
-            ilpiCapacity: ri.ilpi_capacity,
-            residentsTotal: ri.residents_total,
-            residentsMale: ri.residents_male,
-            residentsFemale: ri.residents_female,
-            dependencyLevel1: ri.dependency_level1,
-            dependencyLevel2: ri.dependency_level2,
-            dependencyLevel3: ri.dependency_level3,
-            accompanistName: ri.accompanist_name,
-            accompanistRole: ri.accompanist_role,
-            signatureDataUrl: ri.signature_data_url
+            ilpiCapacity: ri.ilpi_capacity, residentsTotal: ri.residents_total,
+            residentsMale: ri.residents_male, residentsFemale: ri.residents_female,
+            dependencyLevel1: ri.dependency_level1, dependencyLevel2: ri.dependency_level2,
+            dependencyLevel3: ri.dependency_level3, accompanistName: ri.accompanist_name,
+            accompanistRole: ri.accompanist_role, signatureDataUrl: ri.signature_data_url
           });
         }
       }
     }
 
-    // 3. Sync RESPONSES
+    // 3. Sync RESPONSES (PUSH)
     const resQuery = isManual ? db.responses.filter(r => r.synced !== 1) : db.responses.where('synced').equals(0);
     const pendingResponses = await resQuery.toArray();
-    await logSync('info', `Encontradas ${pendingResponses.length} respostas pendentes`);
-    
     if (pendingResponses.length > 0) {
       const recordsToPush = pendingResponses.map(r => ({
         id: r.id, inspection_id: r.inspectionId, item_id: r.itemId,
         result: r.result, situation_description: r.situationDescription,
         corrective_action: r.correctiveAction, created_at: r.createdAt,
-        updated_at: r.updatedAt, user_id: user.id,
-        custom_description: r.customDescription
+        updated_at: r.updatedAt, user_id: user.id, custom_description: r.customDescription
       }));
-
       const { successIds, errors } = await safeBatchUpsert('responses', recordsToPush);
-      if (successIds.length > 0) {
-        await db.responses.where('id').anyOf(successIds).modify({ synced: 1 });
-      }
-      if (errors.length > 0) {
-        await logSync('error', 'Algumas respostas falharam ao enviar', errors[0]);
-      }
+      if (successIds.length > 0) await db.responses.where('id').anyOf(successIds).modify({ synced: 1 });
     }
 
-    const { data: remoteRes, error: rrErr } = await withTimeout<any>(Promise.resolve(supabase.from('responses').select('*').limit(500)), 60000);
-    if (rrErr) await logSync('error', 'Falha ao baixar Respostas', rrErr);
+    // 3. PULL RESPONSES
+    const { data: remoteRes } = await withTimeout<any>(Promise.resolve(supabase.from('responses').select('*').limit(1000)));
     if (remoteRes) {
       for (const rr of remoteRes) {
-        if (deletedIds.has(rr.id)) continue; // SKIP
+        if (deletedIds.has(rr.id)) continue;
         const local = await db.responses.get(rr.id);
         if (!local || local.synced !== 0) {
           await db.responses.put({
@@ -337,32 +284,23 @@ export async function syncData(isManual: boolean = false) {
       }
     }
 
-    // 4. Sync PHOTOS (Now in DB as requested)
+    // 4. Sync PHOTOS (PUSH)
     const photoQuery = isManual ? db.photos.filter(p => p.synced !== 1) : db.photos.where('synced').equals(0);
     const pendingPhotos = await photoQuery.toArray();
-    await logSync('info', `Encontradas ${pendingPhotos.length} fotos pendentes`);
-    
     if (pendingPhotos.length > 0) {
       const recordsToPush = pendingPhotos.map(p => ({
         id: p.id, response_id: p.responseId, data_url: p.dataUrl,
         caption: p.caption, taken_at: p.takenAt, user_id: user.id
       }));
-
-      const { successIds, errors } = await safeBatchUpsert('photos', recordsToPush);
-      if (successIds.length > 0) {
-        await db.photos.where('id').anyOf(successIds).modify({ synced: 1 });
-        await logSync('info', 'Fotos enviadas com sucesso');
-      }
-      if (errors.length > 0) {
-        await logSync('error', 'Algumas fotos falharam ao enviar', errors[0]);
-      }
+      const { successIds } = await safeBatchUpsert('photos', recordsToPush);
+      if (successIds.length > 0) await db.photos.where('id').anyOf(successIds).modify({ synced: 1 });
     }
 
-    const { data: remotePh, error: phErr } = await withTimeout<any>(Promise.resolve(supabase.from('photos').select('*')));
-    if (phErr) await logSync('error', 'Falha ao baixar Fotos', phErr);
+    // 4. PULL PHOTOS
+    const { data: remotePh } = await withTimeout<any>(Promise.resolve(supabase.from('photos').select('*').limit(1000)));
     if (remotePh) {
       for (const rp of remotePh) {
-        if (deletedIds.has(rp.id)) continue; // SKIP
+        if (deletedIds.has(rp.id)) continue;
         const local = await db.photos.get(rp.id);
         if (!local || local.synced !== 0) {
           await db.photos.put({
@@ -373,57 +311,23 @@ export async function syncData(isManual: boolean = false) {
       }
     }
 
-    // 5. Sync SCHEDULES & AUTO-LINK
-    // Auto-link: find pending schedules that match an inspection today
-    const activeSchedules = await db.schedules.filter(s => s.status === 'pending').toArray();
-    if (activeSchedules.length > 0) {
-      const allInspections = await db.inspections.toArray();
-      for (const schedule of activeSchedules) {
-        const sDate = new Date(schedule.scheduledAt).toISOString().split('T')[0];
-        const matchingInspec = allInspections.find(i => 
-          i.clientId === schedule.clientId && 
-          new Date(i.inspectionDate).toISOString().split('T')[0] === sDate
-        );
-        if (matchingInspec) {
-          await logSync('info', `Agendamento detectado como realizado automaticamente`);
-          await db.schedules.update(schedule.id, { status: 'completed' });
-        }
-      }
-    }
-
+    // 5. Sync SCHEDULES (PUSH)
     const schQuery = isManual ? db.schedules.filter(s => s.synced !== 1) : db.schedules.where('synced').equals(0);
     const pendingSchedules = await schQuery.toArray();
-    await logSync('info', `Encontrados ${pendingSchedules.length} agendamentos pendentes`);
     if (pendingSchedules.length > 0) {
-      const validSchedules = [];
-      for (const s of pendingSchedules) {
-        const clientExists = await db.clients.get(s.clientId);
-        if (clientExists) validSchedules.push(s);
-        else {
-          await logSync('warn', `Removendo localmente agendamento órfão: ${s.id}`);
-          await db.schedules.delete(s.id);
-        }
-      }
-
-      const recordsToPush = validSchedules.map(s => ({
+      const recordsToPush = pendingSchedules.map(s => ({
         id: s.id, client_id: s.clientId, scheduled_at: s.scheduledAt,
         status: s.status, notes: s.notes, user_id: user.id
       }));
-
-      const { successIds, errors } = await safeBatchUpsert('schedules', recordsToPush);
-      if (successIds.length > 0) {
-        await db.schedules.where('id').anyOf(successIds).modify({ synced: 1 });
-      }
-      if (errors.length > 0) {
-        await logSync('error', 'Alguns agendamentos falharam ao enviar', errors[0]);
-      }
+      const { successIds } = await safeBatchUpsert('schedules', recordsToPush);
+      if (successIds.length > 0) await db.schedules.where('id').anyOf(successIds).modify({ synced: 1 });
     }
 
-    const { data: remoteSch, error: sErr } = await withTimeout<any>(Promise.resolve(supabase.from('schedules').select('*')));
-    if (sErr) await logSync('error', 'Falha ao baixar Agendamentos', sErr);
+    // 5. PULL SCHEDULES
+    const { data: remoteSch } = await withTimeout<any>(Promise.resolve(supabase.from('schedules').select('*').limit(1000)));
     if (remoteSch) {
       for (const rs of remoteSch) {
-        if (deletedIds.has(rs.id)) continue; // SKIP
+        if (deletedIds.has(rs.id)) continue;
         const local = await db.schedules.get(rs.id);
         if (!local || local.synced !== 0) {
           await db.schedules.put({
@@ -434,15 +338,17 @@ export async function syncData(isManual: boolean = false) {
       }
     }
 
-    // CLEANUP ORPHANS (The 207 issue)
+    // CLEANUP ORPHANS (The 200+ responses issue)
     const orphans = await db.responses.filter(r => r.synced === 0).toArray();
+    let orphanCount = 0;
     for (const orphan of orphans) {
       const parent = await db.inspections.get(orphan.inspectionId);
       if (!parent) {
-        await logSync('warn', `Removendo resposta órfã (inspeção inexistente): ${orphan.id}`);
         await db.responses.delete(orphan.id);
+        orphanCount++;
       }
     }
+    if (orphanCount > 0) await logSync('info', `Limpeza concluída: ${orphanCount} respostas órfãs removidas.`);
 
     await logSync('info', 'Sincronização concluída com sucesso');
     if (isManual) alert('Sincronização concluída!');
