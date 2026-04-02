@@ -100,7 +100,7 @@ function App() {
   }
 
   // ✅ Se não tem perfil selecionado, mostra seleção antes da aplicação em si
-  const { name } = useSettingsStore.getState().settings;
+  const name = useSettingsStore((s) => s.settings.name);
   if (!name) {
     return <ProfileSelection />;
   }
