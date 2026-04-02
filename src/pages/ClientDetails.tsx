@@ -57,14 +57,18 @@ export function ClientDetails() {
       setClient(clientData);
 
       // Load all inspections for this client
-      const rawInspections = await db.inspections
+      const rawInspections = (await db.inspections
         .where('clientId').equals(id)
         .reverse()
-        .toArray();
+        .toArray())
+        .filter(i => !i.deletedAt);
 
       const inspectionsWithScores = await Promise.all(
         rawInspections.map(async (insp) => {
-          const responses = await db.responses.where('inspectionId').equals(insp.id).toArray();
+          const responses = await db.responses
+            .where('inspectionId').equals(insp.id)
+            .filter(r => !r.deletedAt)
+            .toArray();
           const template = await db.templates.get(insp.templateId);
           const score = calculateScore(responses, template?.sections || []);
           return { ...insp, score };
@@ -76,7 +80,7 @@ export function ClientDetails() {
       // --- Calcular Não Conformidades Recorrentes deste cliente ---
       const allInspIds = rawInspections.map(i => i.id);
       const allResponses = await db.responses
-        .filter(r => allInspIds.includes(r.inspectionId) && r.result === 'not_complies')
+        .filter(r => !r.deletedAt && allInspIds.includes(r.inspectionId) && r.result === 'not_complies')
         .toArray();
 
       // Contar por itemId

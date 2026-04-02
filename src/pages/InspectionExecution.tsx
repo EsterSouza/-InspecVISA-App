@@ -56,7 +56,12 @@ export function InspectionExecution() {
       try {
         const id = inspectionId || currentInspection?.id;
         const insp = await db.inspections.get(id);
-        if (!insp) throw new Error('Inspection not found');
+        
+        if (!insp || insp.deletedAt) {
+          alert('Esta inspeção não existe ou foi excluída.');
+          navigate('/inspections');
+          return;
+        }
         
         const client = await db.clients.get(insp.clientId);
         if (client) {
@@ -67,10 +72,17 @@ export function InspectionExecution() {
           insp.state = client.state;
         }
 
-        const resps = await db.responses.where('inspectionId').equals(id).toArray();
+        const resps = await db.responses
+          .where('inspectionId').equals(id)
+          .filter(r => !r.deletedAt) // ✅ SOFT DELETE
+          .toArray();
+        
         // Load photos for each response
         for (const r of resps) {
-          r.photos = await db.photos.where('responseId').equals(r.id).toArray();
+          r.photos = await db.photos
+            .where('responseId').equals(r.id)
+            .filter(p => !p.deletedAt) // ✅ SOFT DELETE
+            .toArray();
         }
 
         setCurrentInspection(insp);

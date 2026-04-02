@@ -62,20 +62,12 @@ async function safeBatchUpsert(tableName: string, records: any[]): Promise<{ suc
   return { successIds, errors };
 }
 
-/**
- * Merge inteligente: Servidor ganha SE for mais novo
- * Local ganha SE for mais novo
- * Evita perda de dados em concorrência
- */
 function shouldUpdateLocal(serverDate: Date, localDate: Date | undefined): boolean {
-  if (!localDate) return true; // Não existe local, baixa do servidor
-  return serverDate > localDate; // Servidor é mais atualizado
+  if (!localDate) return true;
+  return serverDate > localDate;
 }
 
-async function pullAllPages(
-  tableName: string,
-  orderBy: string = 'updated_at'
-): Promise<any[]> {
+async function pullAllPages(tableName: string, orderBy: string = 'updated_at'): Promise<any[]> {
   const all: any[] = [];
   const PAGE_SIZE = 500;
   let page = 0;
@@ -86,7 +78,7 @@ async function pullAllPages(
         supabase
           .from(tableName)
           .select('*')
-          // ✅ SEM FILTRO DE TENANT - CONTA UNificada
+          .is('deleted_at', null) // ✅ IGNORA registros deletados no servidor
           .order(orderBy, { ascending: false })
           .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1)
       )
@@ -107,64 +99,88 @@ async function pullAllPages(
   return all;
 }
 
-async function cleanupOrphans() {
-  await logSync('info', 'Limpando registros órfãos locais...');
-  
-  // 1. Respostas sem Inspeção
-  const responses = await db.responses.toArray();
-  for (const r of responses) {
-    const parent = await db.inspections.get(r.inspectionId);
-    if (!parent) {
-      await db.responses.delete(r.id);
-      await logSync('warn', `Removida resposta órfã: ${r.id}`);
-    }
-  }
+// ✅ NOVA FUNÇÃO: Baixar registros DELETADOS do servidor e aplicar localmente
+async function pullDeletedRecords(tableName: string, localTable: any) {
+  try {
+    const { data: deletedRecords } = await withTimeout<any>(
+      Promise.resolve(
+        supabase
+          .from(tableName)
+          .select('id, deleted_at')
+          .not('deleted_at', 'is', null) // Apenas registros deletados
+      )
+    );
 
-  // 2. Fotos sem Resposta
-  const photos = await db.photos.toArray();
-  for (const p of photos) {
-    const parent = await db.responses.get(p.responseId);
-    if (!parent) {
-      await db.photos.delete(p.id);
-      await logSync('warn', `Removida foto órfã: ${p.id}`);
+    if (deletedRecords && deletedRecords.length > 0) {
+      await logSync('info', `Aplicando ${deletedRecords.length} deleções de ${tableName}...`);
+      
+      for (const record of deletedRecords) {
+        const local = await localTable.get(record.id);
+        if (local && !local.deletedAt) {
+          // Marca como deletado localmente (soft delete)
+          await localTable.update(record.id, { 
+            deletedAt: new Date(record.deleted_at),
+            synced: 1 
+          });
+        }
+      }
     }
-  }
-
-  // 3. Inspeções sem Cliente
-  const inspections = await db.inspections.toArray();
-  for (const i of inspections) {
-    const parent = await db.clients.get(i.clientId);
-    if (!parent) {
-      await db.inspections.delete(i.id);
-      await logSync('warn', `Removida inspeção órfã: ${i.id}`);
-    }
-  }
-
-  // 4. Schedules sem Cliente
-  const schedules = await db.schedules.toArray();
-  for (const s of schedules) {
-    const parent = await db.clients.get(s.clientId);
-    if (!parent) {
-      await db.schedules.delete(s.id);
-      await logSync('warn', `Removido schedule órfão: ${s.id}`);
-    }
+  } catch (err: any) {
+    await logSync('error', `Erro ao processar deleções de ${tableName}`, err.message);
   }
 }
 
-async function processPendingDeletions() {
-  const deletions = await db.deletions_sync.toArray();
-  if (deletions.length === 0) return;
-
-  await logSync('info', `Processando ${deletions.length} exclusões pendentes...`);
+async function cleanupOrphans() {
+  await logSync('info', 'Limpando registros órfãos locais...');
   
-  for (const del of deletions) {
-    try {
-      const { error } = await supabase.from(del.table).delete().eq('id', del.recordId);
-      if (!error || error.code === 'PGRST116' || error.code === '404') {
-        await db.deletions_sync.delete(del.id!);
-      }
-    } catch (err) {
-      console.warn(`Failed to sync deletion for ${del.table}:${del.recordId}`, err);
+  // ✅ IMPORTANTE: Agora também limpa registros marcados como deletados há mais de 30 dias
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+
+  // Hard delete de registros soft-deleted antigos (economiza espaço)
+  await db.clients.where('deletedAt').below(thirtyDaysAgo).delete();
+  await db.inspections.where('deletedAt').below(thirtyDaysAgo).delete();
+  await db.responses.where('deletedAt').below(thirtyDaysAgo).delete();
+  await db.photos.where('deletedAt').below(thirtyDaysAgo).delete();
+  await db.schedules.where('deletedAt').below(thirtyDaysAgo).delete();
+  
+  // Respostas órfãs (inspeção não existe OU está deletada)
+  const responses = await db.responses.filter(r => !r.deletedAt).toArray();
+  for (const r of responses) {
+    const parent = await db.inspections.get(r.inspectionId);
+    if (!parent || parent.deletedAt) {
+      await db.responses.update(r.id, { deletedAt: new Date(), synced: 0 });
+      await logSync('warn', `Resposta órfã marcada para deleção: ${r.id}`);
+    }
+  }
+
+  // Fotos órfãs
+  const photos = await db.photos.filter(p => !p.deletedAt).toArray();
+  for (const p of photos) {
+    const parent = await db.responses.get(p.responseId);
+    if (!parent || parent.deletedAt) {
+      await db.photos.update(p.id, { deletedAt: new Date(), synced: 0 });
+      await logSync('warn', `Foto órfã marcada para deleção: ${p.id}`);
+    }
+  }
+
+  // Inspeções órfãs
+  const inspections = await db.inspections.filter(i => !i.deletedAt).toArray();
+  for (const i of inspections) {
+    const parent = await db.clients.get(i.clientId);
+    if (!parent || parent.deletedAt) {
+      await db.inspections.update(i.id, { deletedAt: new Date(), synced: 0 });
+      await logSync('warn', `Inspeção órfã marcada para deleção: ${i.id}`);
+    }
+  }
+
+  // Schedules órfãos
+  const schedules = await db.schedules.filter(s => !s.deletedAt).toArray();
+  for (const s of schedules) {
+    const parent = await db.clients.get(s.clientId);
+    if (!parent || parent.deletedAt) {
+      await db.schedules.update(s.id, { deletedAt: new Date(), synced: 0 });
+      await logSync('warn', `Schedule órfão marcado para deleção: ${s.id}`);
     }
   }
 }
@@ -183,12 +199,7 @@ export async function syncData(isManual: boolean = false) {
   (window as any).isSyncingGlobally = true;
 
   try {
-    await logSync('info', 'Iniciando Sincronização Compartilhada...', { manual: isManual });
-
-    // A. Sync Deletions First
-    await processPendingDeletions();
-    const activeDeletions = await db.deletions_sync.toArray();
-    const deletedIds = new Set(activeDeletions.map(d => d.recordId));
+    await logSync('info', '🔄 Iniciando Sincronização com Soft Delete...', { manual: isManual });
 
     // 0. Sync PROFILE
     const { settings } = (await import('../store/useSettingsStore')).useSettingsStore.getState();
@@ -207,22 +218,22 @@ export async function syncData(isManual: boolean = false) {
     // 1. CLIENTES
     // ============================================================
     
-    // PUSH
+    // PUSH (inclui registros deletados)
     const clientQuery = isManual 
       ? db.clients.filter(c => c.synced !== 1)
       : db.clients.where('synced').equals(0);
     
-    let pendingClients = await clientQuery.toArray();
+    const pendingClients = await clientQuery.toArray();
     
     if (pendingClients.length > 0) {
-      await logSync('info', `Enviando ${pendingClients.length} clientes pendentes...`);
+      await logSync('info', `📤 Enviando ${pendingClients.length} clientes...`);
       
       const clientsToPush = pendingClients.map(c => ({
         id: c.id, name: c.name, cnpj: c.cnpj, address: c.address, category: c.category,
         food_types: c.foodTypes, responsible_name: c.responsibleName, phone: c.phone,
         email: c.email, created_at: c.createdAt, updated_at: c.updatedAt || new Date(),
-        user_id: user.id, city: c.city, state: c.state
-        // tenant_id removido
+        user_id: user.id, city: c.city, state: c.state,
+        deleted_at: c.deletedAt || null // ✅ Envia status de deleção
       }));
 
       const { error: pushError } = await withTimeout<any>(
@@ -231,20 +242,18 @@ export async function syncData(isManual: boolean = false) {
       
       if (!pushError) {
         await db.clients.where('id').anyOf(clientsToPush.map(c => c.id)).modify({ synced: 1 });
-        await logSync('info', 'Clientes enviados com sucesso');
+        await logSync('info', '✅ Clientes enviados com sucesso');
       } else {
-        await logSync('error', 'Falha ao enviar Clientes', pushError);
+        await logSync('error', '❌ Falha ao enviar Clientes', pushError);
       }
     }
 
-    // PULL CLIENTES
+    // PULL CLIENTES (ativos)
     const remoteClients = await pullAllPages('clients');
     if (remoteClients.length > 0) {
-      await logSync('info', `Baixados ${remoteClients.length} clientes da nuvem`);
+      await logSync('info', `📥 Baixados ${remoteClients.length} clientes ativos`);
       
       for (const rc of remoteClients) {
-        if (deletedIds.has(rc.id)) continue;
-        
         const local = await db.clients.get(rc.id);
         const serverUpdate = new Date(rc.updated_at || rc.created_at);
         const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
@@ -255,14 +264,18 @@ export async function syncData(isManual: boolean = false) {
             category: rc.category as any, foodTypes: rc.food_types,
             responsibleName: rc.responsible_name, phone: rc.phone, email: rc.email,
             createdAt: new Date(rc.created_at), updatedAt: serverUpdate,
-            city: rc.city, state: rc.state, tenantId: rc.tenant_id, synced: 1
+            city: rc.city, state: rc.state, tenantId: rc.tenant_id, 
+            deletedAt: rc.deleted_at ? new Date(rc.deleted_at) : null,
+            synced: 1
           });
-        } else if (local && localUpdate && serverUpdate <= localUpdate && local.synced === 0) {
-          // Local mais novo, mas servidor confirmou recepção (edge case, mantido safe)
+        } else if (local && local.synced === 0) {
           await db.clients.update(rc.id, { synced: 1 });
         }
       }
     }
+
+    // ✅ PULL DELEÇÕES de clientes
+    await pullDeletedRecords('clients', db.clients);
 
     // ============================================================
     // 2. INSPEÇÕES
@@ -281,12 +294,12 @@ export async function syncData(isManual: boolean = false) {
       if (client && client.synced === 1) {
         pendingInspec.push(i);
       } else {
-        await logSync('warn', `Inspeção ${i.id} aguardando cliente ${i.clientId} sincronizar`);
+        await logSync('warn', `⏳ Inspeção ${i.id} aguardando cliente ${i.clientId}`);
       }
     }
 
     if (pendingInspec.length > 0) {
-      await logSync('info', `Enviando ${pendingInspec.length} inspeções...`);
+      await logSync('info', `📤 Enviando ${pendingInspec.length} inspeções...`);
       
       const recordsToPush = pendingInspec.map(i => ({
         id: i.id, client_id: i.clientId, template_id: i.templateId,
@@ -298,22 +311,21 @@ export async function syncData(isManual: boolean = false) {
         dependency_level1: i.dependencyLevel1, dependency_level2: i.dependencyLevel2,
         dependency_level3: i.dependencyLevel3, accompanist_name: i.accompanistName,
         accompanist_role: i.accompanistRole, signature_data_url: i.signatureDataUrl,
-        updated_at: i.updatedAt || new Date()
+        updated_at: i.updatedAt || new Date(),
+        deleted_at: i.deletedAt || null // ✅ Soft delete
       }));
       
       const { successIds, errors } = await safeBatchUpsert('inspections', recordsToPush);
       if (successIds.length > 0) await db.inspections.where('id').anyOf(successIds).modify({ synced: 1 });
-      if (errors.length > 0) await logSync('error', 'Falha em algumas inspeções', errors[0].error);
+      if (errors.length > 0) await logSync('error', '❌ Falha em algumas inspeções', errors[0].error);
     }
 
     // PULL INSPEÇÕES
     const remoteInspec = await pullAllPages('inspections');
     if (remoteInspec.length > 0) {
-      await logSync('info', `Baixados ${remoteInspec.length} inspeções da nuvem`);
+      await logSync('info', `📥 Baixados ${remoteInspec.length} inspeções ativas`);
       
       for (const ri of remoteInspec) {
-        if (deletedIds.has(ri.id)) continue;
-        
         const local = await db.inspections.get(ri.id);
         const serverUpdate = new Date(ri.updated_at || ri.created_at);
         const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
@@ -330,13 +342,17 @@ export async function syncData(isManual: boolean = false) {
             dependencyLevel1: ri.dependency_level1, dependencyLevel2: ri.dependency_level2,
             dependencyLevel3: ri.dependency_level3, accompanistName: ri.accompanist_name,
             accompanistRole: ri.accompanist_role, signatureDataUrl: ri.signature_data_url,
-            tenantId: ri.tenant_id, synced: 1
+            tenantId: ri.tenant_id, 
+            deletedAt: ri.deleted_at ? new Date(ri.deleted_at) : null,
+            synced: 1
           });
-        } else if (local && localUpdate && serverUpdate <= localUpdate && local.synced === 0) {
+        } else if (local && local.synced === 0) {
           await db.inspections.update(ri.id, { synced: 1 });
         }
       }
     }
+
+    await pullDeletedRecords('inspections', db.inspections);
 
     // ============================================================
     // 3. RESPOSTAS
@@ -355,14 +371,15 @@ export async function syncData(isManual: boolean = false) {
     }
 
     if (pendingResponses.length > 0) {
-      await logSync('info', `Enviando ${pendingResponses.length} respostas...`);
+      await logSync('info', `📤 Enviando ${pendingResponses.length} respostas...`);
       
       const recordsToPush = pendingResponses.map(r => ({
         id: r.id, inspection_id: r.inspectionId, item_id: r.itemId,
         result: r.result, situation_description: r.situationDescription,
         corrective_action: r.correctiveAction, created_at: r.createdAt,
         updated_at: r.updatedAt || new Date(), user_id: user.id, 
-        custom_description: r.customDescription
+        custom_description: r.customDescription,
+        deleted_at: r.deletedAt || null
       }));
       
       const { successIds } = await safeBatchUpsert('responses', recordsToPush);
@@ -372,11 +389,9 @@ export async function syncData(isManual: boolean = false) {
     // PULL RESPOSTAS
     const remoteRes = await pullAllPages('responses');
     if (remoteRes.length > 0) {
-      await logSync('info', `Baixados ${remoteRes.length} respostas da nuvem`);
+      await logSync('info', `📥 Baixados ${remoteRes.length} respostas ativas`);
       
       for (const rr of remoteRes) {
-        if (deletedIds.has(rr.id)) continue;
-        
         const local = await db.responses.get(rr.id);
         const serverUpdate = new Date(rr.updated_at || rr.created_at);
         const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
@@ -386,14 +401,18 @@ export async function syncData(isManual: boolean = false) {
             id: rr.id, inspectionId: rr.inspection_id, itemId: rr.item_id,
             result: rr.result as any, situationDescription: rr.situation_description,
             correctiveAction: rr.corrective_action, createdAt: new Date(rr.created_at),
-            updatedAt: serverUpdate, photos: [], tenantId: rr.tenant_id, synced: 1,
+            updatedAt: serverUpdate, photos: [], tenantId: rr.tenant_id, 
+            deletedAt: rr.deleted_at ? new Date(rr.deleted_at) : null,
+            synced: 1,
             customDescription: rr.custom_description
           });
-        } else if (local && localUpdate && serverUpdate <= localUpdate && local.synced === 0) {
+        } else if (local && local.synced === 0) {
           await db.responses.update(rr.id, { synced: 1 });
         }
       }
     }
+
+    await pullDeletedRecords('responses', db.responses);
 
     // ============================================================
     // 4. FOTOS
@@ -412,12 +431,13 @@ export async function syncData(isManual: boolean = false) {
     }
 
     if (pendingPhotos.length > 0) {
-      await logSync('info', `Enviando ${pendingPhotos.length} fotos...`);
+      await logSync('info', `📤 Enviando ${pendingPhotos.length} fotos...`);
       
       const recordsToPush = pendingPhotos.map(p => ({
         id: p.id, response_id: p.responseId, data_url: p.dataUrl,
         caption: p.caption, taken_at: p.takenAt, user_id: user.id,
-        updated_at: p.updatedAt || new Date()
+        updated_at: p.updatedAt || new Date(),
+        deleted_at: p.deletedAt || null
       }));
       
       const { successIds } = await safeBatchUpsert('photos', recordsToPush);
@@ -427,11 +447,9 @@ export async function syncData(isManual: boolean = false) {
     // PULL FOTOS
     const remotePh = await pullAllPages('photos', 'taken_at');
     if (remotePh.length > 0) {
-      await logSync('info', `Baixados ${remotePh.length} fotos da nuvem`);
+      await logSync('info', `📥 Baixados ${remotePh.length} fotos ativas`);
       
       for (const rp of remotePh) {
-        if (deletedIds.has(rp.id)) continue;
-        
         const local = await db.photos.get(rp.id);
         const serverUpdate = new Date(rp.updated_at || rp.taken_at || rp.created_at);
         const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
@@ -440,13 +458,17 @@ export async function syncData(isManual: boolean = false) {
           await db.photos.put({
             id: rp.id, responseId: rp.response_id, dataUrl: rp.data_url,
             caption: rp.caption, takenAt: new Date(rp.taken_at), 
-            updatedAt: serverUpdate, tenantId: rp.tenant_id, synced: 1
+            updatedAt: serverUpdate, tenantId: rp.tenant_id, 
+            deletedAt: rp.deleted_at ? new Date(rp.deleted_at) : null,
+            synced: 1
           });
-        } else if (local && localUpdate && serverUpdate <= localUpdate && local.synced === 0) {
+        } else if (local && local.synced === 0) {
           await db.photos.update(rp.id, { synced: 1 });
         }
       }
     }
+
+    await pullDeletedRecords('photos', db.photos);
 
     // ============================================================
     // 5. SCHEDULES
@@ -462,31 +484,33 @@ export async function syncData(isManual: boolean = false) {
       if (client && client.synced === 1) {
         pendingSchedules.push(s);
       } else {
-        await logSync('warn', `Schedule ${s.id} aguardando cliente ${s.clientId} sincronizar`);
+        await logSync('warn', `⏳ Schedule ${s.id} aguardando cliente ${s.clientId}`);
       }
     }
 
     if (pendingSchedules.length > 0) {
-      await logSync('info', `Enviando ${pendingSchedules.length} agendamentos...`);
+      await logSync('info', `📤 Enviando ${pendingSchedules.length} agendamentos...`);
       
       const recordsToPush = pendingSchedules.map(s => ({
         id: s.id, client_id: s.clientId, scheduled_at: s.scheduledAt,
         status: s.status, notes: s.notes, user_id: s.user_id || user.id,
-        updated_at: s.updatedAt || new Date()
+        updated_at: s.updatedAt || new Date(),
+        deleted_at: s.deletedAt || null 
       }));
       
       const { successIds } = await safeBatchUpsert('schedules', recordsToPush);
-      if (successIds.length > 0) await db.schedules.where('id').anyOf(successIds).modify({ synced: 1 });
+      if (successIds.length > 0) {
+        await db.schedules.where('id').anyOf(successIds).modify({ synced: 1 });
+        await logSync('info', `✅ ${successIds.length} agendamentos sincronizados`);
+      }
     }
 
     // PULL SCHEDULES
     const remoteSch = await pullAllPages('schedules');
     if (remoteSch.length > 0) {
-      await logSync('info', `Baixados ${remoteSch.length} schedules da nuvem`);
+      await logSync('info', `📥 Baixados ${remoteSch.length} agendamentos ativos`);
       
       for (const rs of remoteSch) {
-        if (deletedIds.has(rs.id)) continue;
-        
         const local = await db.schedules.get(rs.id);
         const serverUpdate = new Date(rs.updated_at || rs.created_at);
         const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
@@ -495,48 +519,46 @@ export async function syncData(isManual: boolean = false) {
           await db.schedules.put({
             id: rs.id, clientId: rs.client_id, scheduledAt: new Date(rs.scheduled_at),
             status: rs.status as any, notes: rs.notes, user_id: rs.user_id, 
-            updatedAt: serverUpdate, tenantId: rs.tenant_id, synced: 1
+            updatedAt: serverUpdate, tenantId: rs.tenant_id, 
+            deletedAt: rs.deleted_at ? new Date(rs.deleted_at) : null,
+            synced: 1
           });
-        } else if (local && localUpdate && serverUpdate <= localUpdate && local.synced === 0) {
+        } else if (local && local.synced === 0) {
           await db.schedules.update(rs.id, { synced: 1 });
         }
       }
     }
+
+    await pullDeletedRecords('schedules', db.schedules);
 
     // ============================================================
     // 6. CLEANUP (FINAL)
     // ============================================================
     await cleanupOrphans();
 
-    await logSync('info', 'Sincronização Compartilhada concluída');
+    await logSync('info', '✅ Sincronização concluída com sucesso!');
     if (isManual) alert('✅ Sincronização concluída!');
     
   } catch (err: any) {
-    await logSync('error', 'Erro inesperado na sincronização', err?.message || err);
+    await logSync('error', '❌ Erro na sincronização', err?.message || err);
     if (isManual) alert('❌ Erro: ' + (err?.message || err));
   } finally {
     (window as any).isSyncingGlobally = false;
   }
 }
 
-// Sync rápido apenas clientes
 export async function syncClientsOnly() {
   const { user } = useAuthStore.getState();
   if (!user || (window as any).isSyncingGlobally) return;
   
   (window as any).isSyncingGlobally = true;
   try {
-    await logSync('info', 'Iniciando sync rápido de clientes...');
+    await logSync('info', 'Sync rápido de clientes...');
     
-    await processPendingDeletions();
-    const activeDeletions = await db.deletions_sync.toArray();
-    const deletedIds = new Set(activeDeletions.map(d => d.recordId));
-
     const remoteClients = await pullAllPages('clients');
     
     if (remoteClients && remoteClients.length > 0) {
       for (const rc of remoteClients) {
-        if (deletedIds.has(rc.id)) continue;
         const local = await db.clients.get(rc.id);
         const serverUpdate = new Date(rc.updated_at || rc.created_at);
         const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
@@ -547,14 +569,18 @@ export async function syncClientsOnly() {
             category: rc.category as any, foodTypes: rc.food_types,
             responsibleName: rc.responsible_name, phone: rc.phone, email: rc.email,
             createdAt: new Date(rc.created_at), updatedAt: serverUpdate,
-            city: rc.city, state: rc.state, tenantId: rc.tenant_id, synced: 1
+            city: rc.city, state: rc.state, tenantId: rc.tenant_id, 
+            deletedAt: rc.deleted_at ? new Date(rc.deleted_at) : null,
+            synced: 1
           });
-        } else if (local && localUpdate && serverUpdate <= localUpdate && local.synced === 0) {
+        } else if (local && local.synced === 0) {
           await db.clients.update(rc.id, { synced: 1 });
         }
       }
     }
-    await logSync('info', 'Sync rápido de clientes concluído.');
+    
+    await pullDeletedRecords('clients', db.clients);
+    await logSync('info', 'Sync rápido concluído');
   } catch (err) {
     console.error('Failed fast sync', err);
   } finally {

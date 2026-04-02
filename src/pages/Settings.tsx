@@ -299,6 +299,25 @@ export function Settings() {
         </CardContent>
       </Card>
 
+      <Card className="bg-purple-50 border-purple-200 shadow-sm hover:shadow-md transition-shadow">
+        <CardHeader>
+          <CardTitle className="flex items-center text-purple-700">
+            <Upload className="mr-2 h-5 w-5" />
+            Migração de Dados (Equipe)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-purple-600 mb-4 font-medium">
+            Importe o backup da conta antiga da Ana para consolidar as inspeções de Nutrição com os seus registros atuais.
+          </p>
+          <Link to="/importar-dados">
+            <Button variant="outline" className="w-full border-purple-300 text-purple-700 hover:bg-purple-100 font-bold">
+              Iniciar Consolidação Inteligente
+            </Button>
+          </Link>
+        </CardContent>
+      </Card>
+
       <Card className="border-red-100 bg-red-50">
         <CardContent className="p-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">

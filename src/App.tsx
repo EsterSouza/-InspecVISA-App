@@ -19,6 +19,7 @@ import { InspectionSummary } from './pages/InspectionSummary';
 import { Settings } from './pages/Settings';
 import { ClientDetails } from './pages/ClientDetails';
 import { Schedules } from './pages/Schedules';
+import { ImportLegacyData } from './pages/ImportLegacyData';
 
 import { useAuthStore } from './store/useAuthStore';
 import { Login } from './pages/Login';
@@ -131,6 +132,10 @@ function App() {
             <Route path="/new" element={<NewInspection />} />
             <Route path="/execute" element={<InspectionExecution />} />
             <Route path="/summary" element={<InspectionSummary />} />
+
+            {/* Administração e Migração */}
+            <Route path="/settings" element={<ProtectedRoute requiredRole="admin"><Settings /></ProtectedRoute>} />
+            <Route path="/importar-dados" element={<ProtectedRoute requiredRole="admin"><ImportLegacyData /></ProtectedRoute>} />
 
             {/* Utilitárias */}
             <Route path="/debug" element={<Debug />} />

@@ -28,8 +28,8 @@ export function Schedules() {
     setLoading(true);
     try {
       const [sList, cList] = await Promise.all([
-        db.schedules.toArray(),
-        db.clients.toArray()
+        db.schedules.toArray().then(list => list.filter(s => !s.deletedAt)),
+        db.clients.toArray().then(list => list.filter(c => !c.deletedAt))
       ]);
       
       // Revive dates and populate client names

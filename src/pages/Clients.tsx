@@ -27,6 +27,10 @@ export function Clients() {
 
   const loadClients = async () => {
     let list = await db.clients.orderBy('createdAt').reverse().toArray();
+    
+    // ✅ SOFT DELETE: Remove registros marcados como deletados
+    list = list.filter(c => !c.deletedAt);
+
     if (filterCat !== 'all') {
       list = list.filter(c => c.category === filterCat);
     }

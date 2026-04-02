@@ -32,7 +32,7 @@ export function Dashboard() {
         .toArray();
       
       const sortedUpcoming = upcoming
-        .filter(s => s.scheduledAt >= new Date())
+        .filter(s => !s.deletedAt && s.scheduledAt >= new Date()) // ✅ SOFT DELETE
         .sort((a, b) => a.scheduledAt.getTime() - b.scheduledAt.getTime())
         .slice(0, 3);
       
@@ -43,7 +43,13 @@ export function Dashboard() {
       setNextSchedules(sortedUpcoming);
 
       // Get latest 5 inspections
-      const inspections = await db.inspections.orderBy('createdAt').reverse().limit(5).toArray();
+      const inspections = await db.inspections
+        .orderBy('createdAt')
+        .reverse()
+        .filter(i => !i.deletedAt) // ✅ SOFT DELETE
+        .limit(5)
+        .toArray();
+
       // Populate client names
       for (const insp of inspections) {
         const client = await db.clients.get(insp.clientId);
@@ -52,14 +58,24 @@ export function Dashboard() {
       setRecentInspections(inspections);
 
       // Get basic stats
-      const active = await db.inspections.where('status').equals('in_progress').count();
-      const completedList = await db.inspections.where('status').equals('completed').toArray();
+      const active = await db.inspections
+        .where('status').equals('in_progress')
+        .filter(i => !i.deletedAt) // ✅ SOFT DELETE
+        .count();
+
+      const completedList = await db.inspections
+        .where('status').equals('completed')
+        .filter(i => !i.deletedAt) // ✅ SOFT DELETE
+        .toArray();
       
       let totalPct = 0;
       const allTemplates = getTemplates();
       
       for (const insp of completedList) {
-        const resp = await db.responses.where('inspectionId').equals(insp.id).toArray();
+        const resp = await db.responses
+          .where('inspectionId').equals(insp.id)
+          .filter(r => !r.deletedAt) // ✅ SOFT DELETE
+          .toArray();
         const template = allTemplates.find(t => t.id === insp.templateId);
         if (template) {
           const score = calculateScore(resp, template.sections);
@@ -74,7 +90,10 @@ export function Dashboard() {
       });
 
       // Calculate Recurring Issues
-      const allNCs = await db.responses.where('result').equals('not_complies').toArray();
+      const allNCs = await db.responses
+        .where('result').equals('not_complies')
+        .filter(r => !r.deletedAt) // ✅ SOFT DELETE
+        .toArray();
       const itemCounts: Record<string, number> = {};
       allNCs.forEach(nc => {
         itemCounts[nc.itemId] = (itemCounts[nc.itemId] || 0) + 1;

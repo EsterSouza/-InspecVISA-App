@@ -30,13 +30,13 @@ export class InspectionDatabase extends Dexie {
 
   constructor() {
     super('InspectionDB');
-    this.version(9).stores({ // Bumped version from 8 to 9
-      clients:     'id, category, name, city, state, tenantId, createdAt, updatedAt, synced',
+    this.version(10).stores({ // ✅ Bumped to version 10
+      clients:     'id, category, name, city, state, tenantId, deletedAt, createdAt, updatedAt, synced',
       templates:   'id, category',
-      inspections: 'id, clientId, templateId, status, tenantId, [clientId+status], inspectionDate, completedAt, createdAt, updatedAt, synced',
-      responses:   'id, inspectionId, itemId, result, tenantId, updatedAt, synced',
-      photos:      'id, responseId, tenantId, synced',
-      schedules:   'id, clientId, scheduledAt, status, tenantId, updatedAt, synced',
+      inspections: 'id, clientId, templateId, status, tenantId, deletedAt, [clientId+status], inspectionDate, completedAt, createdAt, updatedAt, synced',
+      responses:   'id, inspectionId, itemId, result, tenantId, deletedAt, updatedAt, synced',
+      photos:      'id, responseId, tenantId, deletedAt, synced',
+      schedules:   'id, clientId, scheduledAt, status, tenantId, deletedAt, updatedAt, synced',
       sync_logs:   '++id, timestamp, level',
       deletions_sync: '++id, table, recordId'
     });
@@ -49,8 +49,8 @@ export class InspectionDatabase extends Dexie {
 
         obj.synced = 0; // 0 = pending
         obj.updatedAt = new Date();
+        obj.deletedAt = null; // ✅ Inicializa como não deletado
         
-        // ✅ OPCIONAL: Se o usuário tiver tenantId, insere (pra dados legados), mas não bloqueia se não tiver
         if (tenantId) {
           obj.tenantId = tenantId;
         }
@@ -58,7 +58,7 @@ export class InspectionDatabase extends Dexie {
 
       table.hook('updating', (mods: Record<string, any>, primKey, obj) => {
         // ✅ FIX #7: Se o syncService está explicitamente marcando como sincronizado, retorna mods sem alterar
-        if (mods.synced === 1) return mods; // retorna objeto, não undefined
+        if (mods.synced === 1) return mods;
 
         // Qualquer outra atualização do usuário reseta para pendente
         return {
@@ -79,75 +79,87 @@ export async function initializeDatabase(templates: ChecklistTemplate[]) {
   await db.templates.bulkPut(templates);
 }
 
-// Helper to track deletions for sync
-async function trackDeletion(tableName: string, recordId: string) {
-  try {
-    await db.deletions_sync.add({
-      table: tableName,
-      recordId,
-      timestamp: new Date()
-    });
-  } catch (err) {
-    console.warn('Failed to track deletion', err);
-  }
-}
-
-// Recursive deletion of a client and all associated data
+// ✅ SOFT DELETE: Marca como deletado em vez de apagar fisicamente do banco local
 export async function deleteClient(clientId: string) {
-  await db.transaction('rw', [db.clients, db.inspections, db.responses, db.photos, db.schedules, db.deletions_sync], async () => {
-    // 1. Track client for remote deletion
-    await trackDeletion('clients', clientId);
+  const now = new Date();
+  
+  await db.transaction('rw', [db.clients, db.inspections, db.responses, db.photos, db.schedules], async () => {
+    // Marca cliente como deletado
+    await db.clients.update(clientId, { 
+      deletedAt: now, 
+      synced: 0, // ✅ Força sync para enviar ao servidor
+      updatedAt: now 
+    });
 
-    // 2. Get and track all inspections
+    // Marca inspeções do cliente como deletadas
     const clientInspections = await db.inspections.where('clientId').equals(clientId).toArray();
     for (const inspec of clientInspections) {
-      await trackDeletion('inspections', inspec.id);
+      await db.inspections.update(inspec.id, { 
+        deletedAt: now, 
+        synced: 0, 
+        updatedAt: now 
+      });
       
-      // 3. Get and track all responses
+      // Marca respostas como deletadas
       const responses = await db.responses.where('inspectionId').equals(inspec.id).toArray();
       for (const res of responses) {
-        await trackDeletion('responses', res.id);
-        // Photos are tracked via response or handled by cascade in PG
+        await db.responses.update(res.id, { 
+          deletedAt: now, 
+          synced: 0, 
+          updatedAt: now 
+        });
+        
+        // Marca fotos como deletadas
+        await db.photos.where('responseId').equals(res.id).modify({ 
+          deletedAt: now, 
+          synced: 0, 
+          updatedAt: now 
+        });
       }
-      
-      await db.responses.where('inspectionId').equals(inspec.id).delete();
     }
     
-    await db.inspections.where('clientId').equals(clientId).delete();
-    await db.schedules.where('clientId').equals(clientId).delete();
-    await db.clients.delete(clientId);
+    // Marca agendamentos como deletados
+    await db.schedules.where('clientId').equals(clientId).modify({ 
+      deletedAt: now, 
+      synced: 0, 
+      updatedAt: now 
+    });
   });
-
-  // Opportunistic remote delete
-  try {
-    await supabase.from('clients').delete().eq('id', clientId);
-  } catch (err) {}
 }
 
 export async function deleteInspection(inspectionId: string) {
-  await db.transaction('rw', [db.inspections, db.responses, db.photos, db.deletions_sync], async () => {
-    await trackDeletion('inspections', inspectionId);
+  const now = new Date();
+  
+  await db.transaction('rw', [db.inspections, db.responses, db.photos], async () => {
+    await db.inspections.update(inspectionId, { 
+      deletedAt: now, 
+      synced: 0, 
+      updatedAt: now 
+    });
     
     const responses = await db.responses.where('inspectionId').equals(inspectionId).toArray();
     for (const res of responses) {
-      await trackDeletion('responses', res.id);
+      await db.responses.update(res.id, { 
+        deletedAt: now, 
+        synced: 0, 
+        updatedAt: now 
+      });
+      
+      await db.photos.where('responseId').equals(res.id).modify({ 
+        deletedAt: now, 
+        synced: 0, 
+        updatedAt: now 
+      });
     }
-    
-    await db.responses.where('inspectionId').equals(inspectionId).delete();
-    await db.inspections.delete(inspectionId);
   });
-
-  try {
-    await supabase.from('inspections').delete().eq('id', inspectionId);
-  } catch (err) {}
 }
 
 export async function deleteSchedule(scheduleId: string) {
-  await trackDeletion('schedules', scheduleId);
-  await db.schedules.delete(scheduleId);
-
-  try {
-    await supabase.from('schedules').delete().eq('id', scheduleId);
-  } catch (err) {}
+  const now = new Date();
+  await db.schedules.update(scheduleId, { 
+    deletedAt: now, 
+    synced: 0, 
+    updatedAt: now 
+  });
 }
 

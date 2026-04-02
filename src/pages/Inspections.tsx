@@ -17,6 +17,9 @@ export function Inspections() {
   const loadInspections = async () => {
     let list = await db.inspections.orderBy('createdAt').reverse().toArray();
     
+    // ✅ SOFT DELETE: Remove registros marcados como deletados
+    list = list.filter(i => !i.deletedAt);
+    
     // Join client data
     const clientIds = [...new Set(list.map(i => i.clientId))];
     const clients = await db.clients.where('id').anyOf(clientIds).toArray();
