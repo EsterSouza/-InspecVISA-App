@@ -45,35 +45,56 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    // Safety Timeout: 10s
-    const timeout = setTimeout(() => {
-      // ✅ SÓ força a partida se NÃO houver um erro explícito e ainda estiver inicializando
-      if (!initialized && !initError) {
-        console.warn('Initialization timeout hit. Forcing start.');
-        setIsInitializing(false);
-      }
-    }, 10000);
+    let didCancel = false;
+
+    const doReset = () => {
+      localStorage.clear();
+      const req = indexedDB.deleteDatabase('InspectionDB');
+      req.onsuccess = () => window.location.reload();
+      req.onerror = () => window.location.reload();
+      req.onblocked = () => window.location.reload();
+    };
 
     const initApp = async () => {
+      // Safety timeout: if stuck for 12s, force-show error screen
+      const timeout = setTimeout(() => {
+        if (!didCancel) {
+          setInitError(true);
+          setIsInitializing(false);
+        }
+      }, 12000);
+
       try {
         await initialize();
         const templates = getTemplates();
         await initializeDatabase(templates);
-        setIsInitializing(false);
+        if (!didCancel) setIsInitializing(false);
       } catch (err: any) {
-        console.error('Initialization fail:', err);
-        // ✅ Detecta o erro específico de corrupção do Chrome
-        if (err.name === 'UnknownError' || err.message?.includes('backing store')) {
-          console.error('DETECTADO: Corrupção do Chrome IndexedDB');
+        console.error('[App] Init failed:', err);
+        // Auto-recover: backing store errors can't be fixed without a reset
+        const isBackingStoreError =
+          err?.name === 'UnknownError' ||
+          err?.message?.includes('backing store') ||
+          err?.inner?.name === 'UnknownError';
+
+        if (isBackingStoreError) {
+          console.warn('[App] Backing store corrupt. Auto-resetting...');
+          doReset(); // ← RESET AUTOMÁTICO, sem precisar clicar em nada
+          return;
         }
-        setInitError(true);
-        setIsInitializing(false); // ✅ Libera o loader para mostrar a tela de erro
+
+        if (!didCancel) {
+          setInitError(true);
+          setIsInitializing(false);
+        }
+      } finally {
+        clearTimeout(timeout);
       }
     };
 
     initApp();
-    return () => clearTimeout(timeout);
-  }, [initialized, initError]); // ✅ Adicionado initError na dependência
+    return () => { didCancel = true; };
+  }, []); // ← Sem dependências: só roda UMA vez ao montar
 
   // Background Auto-Sync Hook
   useEffect(() => {
@@ -85,15 +106,11 @@ function App() {
       }
     };
 
-    // Trigger on network reconnect
     window.addEventListener('online', backgroundSync);
-    // Trigger on app visibility change (back from background)
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') backgroundSync();
     };
     window.addEventListener('visibilitychange', handleVisibility);
-
-    // Trigger automatically every 2 minutes
     const interval = setInterval(backgroundSync, 2 * 60 * 1000);
 
     return () => {
@@ -105,28 +122,35 @@ function App() {
 
   const name = useSettingsStore((s) => s.settings.name);
 
+  const handleEmergencyReset = () => {
+    localStorage.clear();
+    const req = indexedDB.deleteDatabase('InspectionDB');
+    req.onsuccess = () => window.location.reload();
+    req.onerror = () => window.location.reload();
+    req.onblocked = () => window.location.reload();
+  };
+
   return (
     <BrowserRouter>
-      {(initError) ? (
+      {initError ? (
         <div className="flex h-screen flex-col items-center justify-center bg-red-50 p-6 text-center">
           <AlertCircle className="h-12 w-12 text-red-600 mb-4" />
-          <h2 className="text-xl font-bold text-red-900 mb-2">Erro ao Iniciar</h2>
-          <p className="text-red-700 mb-6 max-w-xs mx-auto">Não foi possível carregar o banco de dados. Tente atualizar a página ou limpar os dados.</p>
+          <h2 className="text-xl font-bold text-red-900 mb-2">Banco de Dados Corrompido</h2>
+          <p className="text-red-700 mb-6 max-w-xs mx-auto">
+            O banco de dados local está danificado. Clique em <strong>"Recuperar App"</strong> para limpar e reconectar à nuvem. Seus dados salvos na nuvem não serão perdidos.
+          </p>
           <div className="flex flex-col gap-3 w-full max-w-xs">
-            <Button onClick={() => window.location.reload()} className="bg-red-600 hover:bg-red-700 w-full">Tentar Novamente</Button>
-            
-            <button 
-              onClick={async () => {
-                if (window.confirm('CUIDADO: Isso apagará TODOS os dados salvos localmente (fotos e inspeções não sincronizadas) para tentar recuperar o app. Deseja prosseguir?')) {
-                  localStorage.clear();
-                  const req = indexedDB.deleteDatabase('InspectionDB');
-                  req.onsuccess = () => window.location.reload();
-                  req.onerror = () => window.location.reload();
-                }
-              }}
-              className="text-red-400 hover:text-red-500 text-xs font-medium underline"
+            <button
+              onClick={handleEmergencyReset}
+              className="w-full rounded-lg bg-red-600 px-4 py-3 text-white font-bold hover:bg-red-700 active:scale-95 transition-all"
             >
-              Emergência: Limpar tudo e recomeçar
+              🔄 Recuperar App
+            </button>
+            <button
+              onClick={() => window.location.reload()}
+              className="text-red-400 hover:text-red-600 text-sm underline"
+            >
+              Tentar Recarregar (sem limpar)
             </button>
           </div>
         </div>
