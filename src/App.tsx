@@ -45,28 +45,35 @@ function App() {
   }, [theme]);
 
   useEffect(() => {
-    // Initialize Auth and Database
-    const initApp = async () => {
-      // Safety timeout: forced initialize after 10 seconds to avoid indefinite loader
-      const timeout = setTimeout(() => {
+    // Safety Timeout: 10s
+    const timeout = setTimeout(() => {
+      // ✅ SÓ força a partida se NÃO houver um erro explícito e ainda estiver inicializando
+      if (!initialized && !initError) {
         console.warn('Initialization timeout hit. Forcing start.');
         setIsInitializing(false);
-      }, 10000);
+      }
+    }, 10000);
 
+    const initApp = async () => {
       try {
         await initialize();
         const templates = getTemplates();
         await initializeDatabase(templates);
-      } catch (err) {
-        console.error('Initialization fail:', err);
-        setInitError(true);
-      } finally {
-        clearTimeout(timeout);
         setIsInitializing(false);
+      } catch (err: any) {
+        console.error('Initialization fail:', err);
+        // ✅ Detecta o erro específico de corrupção do Chrome
+        if (err.name === 'UnknownError' || err.message?.includes('backing store')) {
+          console.error('DETECTADO: Corrupção do Chrome IndexedDB');
+        }
+        setInitError(true);
+        setIsInitializing(false); // ✅ Libera o loader para mostrar a tela de erro
       }
     };
+
     initApp();
-  }, [initialize]);
+    return () => clearTimeout(timeout);
+  }, [initialized, initError]); // ✅ Adicionado initError na dependência
 
   // Background Auto-Sync Hook
   useEffect(() => {
