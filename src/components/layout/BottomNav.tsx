@@ -8,6 +8,7 @@ const staffNavItems = [
   { to: '/',            icon: Home,          label: 'Início' },
   { to: '/clients',     icon: Users,         label: 'Clientes' },
   { to: '/inspections', icon: ClipboardCheck,label: 'Inspeções' },
+  { to: '/schedules',   icon: Calendar,      label: 'Agenda' },
   { to: '/new',         icon: PlusCircle,    label: 'Nova', main: true },
 ];
 

@@ -6,7 +6,7 @@ import {
   FileText, 
   TrendingUp, 
   AlertCircle, 
-  CheckCircle2,
+  AlertTriangle,
   ChevronRight,
   ExternalLink,
   Edit2,
@@ -17,6 +17,7 @@ import { db, deleteClient } from '../db/database';
 import { type Client, type Inspection, type InspectionScore, FOOD_SEGMENT_LABELS } from '../types';
 import { calculateScore } from '../utils/scoring';
 import { formatDateTime } from '../utils/imageUtils';
+import { getTemplates } from '../data/templates';
 import { Button } from '../components/ui/Button';
 import { Card, CardContent } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
@@ -31,11 +32,14 @@ import {
   ResponsiveContainer 
 } from 'recharts';
 
+type RecurringNC = { itemId: string; description: string; count: number };
+
 export function ClientDetails() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [client, setClient] = useState<Client | null>(null);
   const [inspections, setInspections] = useState<(Inspection & { score: InspectionScore })[]>([]);
+  const [recurringNCs, setRecurringNCs] = useState<RecurringNC[]>([]);
   const [loading, setLoading] = useState(true);
   const [isModalOpen, setIsModalOpen] = useState(false);
   
@@ -68,6 +72,36 @@ export function ClientDetails() {
       );
 
       setInspections(inspectionsWithScores.sort((a,b) => b.createdAt.getTime() - a.createdAt.getTime()));
+
+      // --- Calcular Não Conformidades Recorrentes deste cliente ---
+      const allInspIds = rawInspections.map(i => i.id);
+      const allResponses = await db.responses
+        .filter(r => allInspIds.includes(r.inspectionId) && r.result === 'not_complies')
+        .toArray();
+
+      // Contar por itemId
+      const countMap: Record<string, number> = {};
+      for (const r of allResponses) {
+        countMap[r.itemId] = (countMap[r.itemId] || 0) + 1;
+      }
+
+      // Buscar descrição de cada item nos templates
+      const templates = getTemplates();
+      const allItems = templates.flatMap(t => t.sections.flatMap(s => s.items));
+
+      const ncs: RecurringNC[] = Object.entries(countMap)
+        .filter(([, count]) => count >= 2)
+        .sort(([, a], [, b]) => b - a)
+        .map(([itemId, count]) => {
+          const item = allItems.find(i => i.id === itemId);
+          return {
+            itemId,
+            description: item?.description || `Item ${itemId}`,
+            count,
+          };
+        });
+
+      setRecurringNCs(ncs);
       setLoading(false);
     };
 
@@ -261,15 +295,41 @@ export function ClientDetails() {
               ) : (
                 <div className="space-y-3">
                   <p className="text-xs text-gray-500 mb-2">Baseado na última visita ({latestInspection.score.notCompliesCount} itens pendentes):</p>
-                  <ul className="space-y-2">
-                    {/* Simplified view of open NCs could be fetched here */}
-                    <li className="text-sm text-gray-700 leading-relaxed border-l-2 border-red-200 pl-3">
-                      Visualize o último relatório para ver todas as não conformidades pendentes.
-                    </li>
-                  </ul>
                   <Button variant="outline" size="sm" className="w-full text-xs" onClick={() => navigate('/summary', { state: { inspectionId: latestInspection.id }})}>
                     Ver Último Relatório <ExternalLink className="ml-2 h-3 w-3" />
                   </Button>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Não Conformidades Recorrentes (≥2x neste cliente) */}
+          <Card>
+            <CardContent className="p-5">
+              <h3 className="text-sm font-bold text-gray-900 mb-1 flex items-center uppercase tracking-wider">
+                <AlertTriangle className="mr-2 h-4 w-4 text-red-500" />
+                NC Recorrentes
+              </h3>
+              <p className="text-[10px] text-gray-400 mb-4">Itens com ≥ 2 falhas neste cliente</p>
+              {recurringNCs.length === 0 ? (
+                <p className="text-xs text-gray-500 bg-gray-50 p-3 rounded text-center">
+                  {inspections.length === 0
+                    ? 'Aguardando inspeções.'
+                    : '✅ Nenhuma NC repetida detectada.'}
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {recurringNCs.map(nc => (
+                    <div
+                      key={nc.itemId}
+                      className="flex items-start gap-3 bg-red-50 border border-red-100 rounded-lg p-3"
+                    >
+                      <span className="mt-0.5 flex-shrink-0 h-5 w-5 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
+                        {nc.count}
+                      </span>
+                      <p className="text-xs text-gray-700 leading-snug">{nc.description}</p>
+                    </div>
+                  ))}
                 </div>
               )}
             </CardContent>
