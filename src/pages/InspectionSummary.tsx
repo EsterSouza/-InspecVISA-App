@@ -262,39 +262,39 @@ export function InspectionSummary() {
           </Card>
         )}
         <div className="text-center bg-white rounded-2xl shadow-sm border border-gray-200 p-8 sm:p-12 mt-6">
-          <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">{currentInspection.clientName}</h1>
+          <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">{currentInspection.clientName || 'Inspeção'}</h1>
           <p className="mt-2 text-gray-500 font-medium">{template.name}</p>
           <p className="text-sm text-gray-400 mt-1">Concluída em {formatDateTime(currentInspection.completedAt || new Date())}</p>
           
           <div className="mt-8 flex flex-col items-center justify-center space-y-2">
               <div 
                 className="text-6xl sm:text-7xl font-black tracking-tighter"
-                style={{ color: scoreColor }}
+                style={{ color: scoreColor || '#666' }}
               >
-                {scoreArea.rp?.toFixed(1) || '0.0'}
+                {typeof scoreArea.rp === 'number' ? scoreArea.rp.toFixed(1) : '0.0'}
               </div>
               <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest -mt-2">
-                Risco Potencial MARP
+                Índice de Risco MARP (0-15)
               </div>
               <div 
                 className="px-4 py-1.5 rounded-full text-sm font-bold tracking-widest text-white uppercase mt-4"
-                style={{ backgroundColor: scoreColor }}
+                style={{ backgroundColor: scoreColor || '#666' }}
               >
-                {classificationLabel(scoreArea.classification)}
+                {scoreArea.classification ? classificationLabel(scoreArea.classification) : 'NF'}
               </div>
           </div>
 
           <div className="mt-6 flex justify-center gap-8 text-[11px] font-bold text-gray-500 uppercase">
              <div className="text-center">
-                <div className="text-gray-900 text-lg">{scoreArea.ic?.toFixed(2) || '—'}</div>
+                <div className="text-gray-900 text-lg">{typeof scoreArea.ic === 'number' ? scoreArea.ic.toFixed(2) : '—'}</div>
                 <div>IC (Crítico)</div>
              </div>
              <div className="text-center border-x border-gray-100 px-8">
-                <div className="text-gray-900 text-lg">{scoreArea.inc?.toFixed(2) || '—'}</div>
+                <div className="text-gray-900 text-lg">{typeof scoreArea.inc === 'number' ? scoreArea.inc.toFixed(2) : '—'}</div>
                 <div>INC (Não Crítico)</div>
              </div>
              <div className="text-center">
-                <div className="text-gray-900 text-lg">{Math.round(scoreArea.scorePercentage)}%</div>
+                <div className="text-gray-900 text-lg">{Math.round(scoreArea.scorePercentage || 0)}%</div>
                 <div>Conformidade</div>
              </div>
           </div>
@@ -302,24 +302,20 @@ export function InspectionSummary() {
 
           <div className="mt-10 grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-2xl mx-auto border-t border-gray-100 pt-8">
               <div className="flex flex-col items-center">
-                <span className="text-3xl font-bold text-gray-900">{scoreArea.evaluatedItems}</span>
+                <span className="text-3xl font-bold text-gray-900">{scoreArea.evaluatedItems || 0}</span>
                 <span className="text-xs font-semibold text-gray-500 uppercase mt-1">Itens Avaliados</span>
               </div>
               <div className="flex flex-col items-center">
-                <span className="text-3xl font-bold text-green-600">{scoreArea.compliesCount}</span>
+                <span className="text-3xl font-bold text-green-600">{scoreArea.compliesCount || 0}</span>
                 <span className="text-xs font-semibold text-green-800 uppercase mt-1">Conformes</span>
               </div>
               <div className="flex flex-col items-center">
-                <span className="text-3xl font-bold text-red-600">{scoreArea.notCompliesCount}</span>
+                <span className="text-3xl font-bold text-red-600">{scoreArea.notCompliesCount || 0}</span>
                 <span className="text-xs font-semibold text-red-800 uppercase mt-1">Nãos Conf.</span>
               </div>
               <div className="flex flex-col items-center">
-                <span className="text-3xl font-bold text-slate-500">{scoreArea.notObservedCount}</span>
+                <span className="text-3xl font-bold text-slate-500">{scoreArea.notObservedCount || 0}</span>
                 <span className="text-xs font-semibold text-slate-500 uppercase mt-1">N. Obs (NO)</span>
-              </div>
-              <div className="flex flex-col items-center">
-                <span className="text-3xl font-bold text-gray-400">{scoreArea.notApplicableCount}</span>
-                <span className="text-xs font-semibold text-gray-500 uppercase mt-1">N/A</span>
               </div>
           </div>
         </div>
@@ -330,8 +326,8 @@ export function InspectionSummary() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {scoreArea.scoreBySection.map((s) => {
-                const sectionDef = template.sections.find(sec => sec.id === s.sectionId);
+              {(scoreArea.scoreBySection || []).map((s) => {
+                const sectionDef = template?.sections?.find(sec => sec.id === s.sectionId);
                 return (
                   <div key={s.sectionId} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50/50">
                       <div className="flex-1">
@@ -344,16 +340,16 @@ export function InspectionSummary() {
                           )}
                         </div>
                         <div className="text-xs text-gray-500 mt-1 flex gap-3">
-                          <span>{Math.round(s.scorePercentage)}% Conforme</span>
-                          <span className="text-red-500">{s.notCompliesCount} Irreg.</span>
-                          {s.notObservedCount > 0 && <span className="text-slate-500">{s.notObservedCount} Não Obs.</span>}
+                          <span>{Math.round(s.scorePercentage || 0)}% Conforme</span>
+                          <span className="text-red-500">{s.notCompliesCount || 0} Irreg.</span>
+                          {(s.notObservedCount || 0) > 0 && <span className="text-slate-500">{s.notObservedCount} Não Obs.</span>}
                         </div>
                       </div>
                       <div className="mt-3 sm:mt-0 w-full sm:w-48 h-2 bg-gray-200 rounded-full overflow-hidden flex">
-                        <div style={{ width: `${s.totalItems > 0 ? (s.compliesCount/s.totalItems)*100 : 0}%` }} className="bg-green-500 h-full" />
-                        <div style={{ width: `${s.totalItems > 0 ? (s.notCompliesCount/s.totalItems)*100 : 0}%` }} className="bg-red-500 h-full" />
-                        <div style={{ width: `${s.totalItems > 0 ? (s.notObservedCount/s.totalItems)*100 : 0}%` }} className="bg-slate-400 h-full" />
-                        <div style={{ width: `${s.totalItems > 0 ? (s.notApplicableCount/s.totalItems)*100 : 0}%` }} className="bg-gray-300 h-full" />
+                        <div style={{ width: `${s.totalItems > 0 ? ((s.compliesCount || 0)/s.totalItems)*100 : 0}%` }} className="bg-green-500 h-full" />
+                        <div style={{ width: `${s.totalItems > 0 ? ((s.notCompliesCount || 0)/s.totalItems)*100 : 0}%` }} className="bg-red-500 h-full" />
+                        <div style={{ width: `${s.totalItems > 0 ? ((s.notObservedCount || 0)/s.totalItems)*100 : 0}%` }} className="bg-slate-400 h-full" />
+                        <div style={{ width: `${s.totalItems > 0 ? ((s.notApplicableCount || 0)/s.totalItems)*100 : 0}%` }} className="bg-gray-300 h-full" />
                       </div>
                   </div>
                 );

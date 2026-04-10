@@ -560,12 +560,12 @@ export async function generatePDF(
   const methodologyText = [
     'Este relatório utiliza a Metodologia de Avaliação de Risco Potencial (MARP), baseada no Roteiro de Inspeção Federal. ',
     '',
-    '1. ÍNDICE CRÍTICO (IC): Calculado via MÉDIA GEOMÉTRICA das pontuações dos itens críticos (pesos binários 0 ou 3). Por ser geométrica, a falha em um único item crítico penaliza severamente o índice, podendo levar o estabelecimento ao status de INACEITÁVEL imediatamente.',
-    '2. ÍNDICE NÃO CRÍTICO (INC): Calculado via MÉDIA ARITMÉTICA PONDERADA dos itens não críticos, considerando pesos normatizados (1, 2, 5 e 10) conforme impacto na segurança sanitária.',
-    '3. COEFICIENTE DE RISCO (CR): Combinação de IC (peso 0.6) e INC (peso 0.4).',
-    '4. RISCO POTENCIAL (RP): Valor final na escala de 0 a 15, que define a classificação do estabelecimento.',
+    '1. ÍNDICE CRÍTICO (IC): Calculado via MÉDIA GEOMÉTRICA das pontuações dos itens críticos (pesos binários 0 ou 3). Por ser geométrica, a falha em um único item crítico penaliza severamente o índice (Peso 0.6 no cálculo global).',
+    '2. ÍNDICE NÃO CRÍTICO (INC): Calculado via MÉDIA ARITMÉTICA PONDERADA dos itens não críticos, considerando pesos normatizados (1, 2, 5 e 10) conforme impacto na segurança sanitária (Peso 0.4 no cálculo global).',
+    '3. COEFICIENTE DE RISCO (CR): Média ponderada entre IC e INC.',
+    '4. RISCO POTENCIAL (RP): Valor final do CR escalonado de 0 a 15.',
     '',
-    'CLASSIFICAÇÕES: Aceitável (RP ≥ 13.5) | Tolerável (12 ≥ RP > 13.5) | Crítico (9 ≥ RP > 12) | Inaceitável (RP < 9).'
+    'CLASSIFICAÇÕES: Alto Padrão (RP ≥ 13.5) | Aceitável (12 ≤ RP < 13.5) | Tolerável (9 ≤ RP < 12) | Inaceitável (RP < 9).'
   ].join('\n');
 
   const methLines = doc.splitTextToSize(methodologyText, contentW);
