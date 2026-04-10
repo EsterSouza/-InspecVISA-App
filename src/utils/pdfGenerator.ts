@@ -152,15 +152,42 @@ export async function generatePDF(
   const classification = score.classification;
   const classColor = classificationColor(classification);
   const rgb = hexToRgb(classColor);
+  
+  // Big Status Box
   doc.setFillColor(rgb[0], rgb[1], rgb[2]);
-  doc.roundedRect(margin, y, contentW, 32, 4, 4, 'F');
-  doc.setFillColor(0, 0, 0, 30);
+  doc.roundedRect(margin, y, contentW, 42, 4, 4, 'F');
+  
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
+  
+  // RP (Risco Potencial)
   doc.setFontSize(32);
-  doc.text(`${Math.round(score.scorePercentage)}%`, margin + contentW / 2, y + 14, { align: 'center' });
-  doc.setFontSize(14);
-  doc.text(`de Conformidade — ${classificationLabel(classification)}`, margin + contentW / 2, y + 24, { align: 'center' });
+  doc.text(`${score.rp?.toFixed(1) || '0.0'}`, margin + contentW / 2, y + 16, { align: 'center' });
+  doc.setFontSize(10);
+  doc.text('RISCO POTENCIAL (0-15)', margin + contentW / 2, y + 22, { align: 'center' });
+  
+  // Status Label
+  doc.setFontSize(16);
+  doc.text(classificationLabel(classification).toUpperCase(), margin + contentW / 2, y + 32, { align: 'center' });
+  
+  // Detailed Indices
+  y += 45;
+  autoTable(doc, {
+    startY: y,
+    head: [['IC (Crítico)', 'INC (Não Crítico)', 'CR (Coef. Risco)', 'Conformidade']],
+    body: [[
+      score.ic?.toFixed(2) || '—',
+      score.inc?.toFixed(2) || '—',
+      score.cr?.toFixed(2) || '—',
+      `${Math.round(score.scorePercentage)}%`
+    ]],
+    headStyles: { fillColor: [240, 240, 240], textColor: [60, 60, 60], fontSize: 8, halign: 'center' },
+    bodyStyles: { fontSize: 11, fontStyle: 'bold', halign: 'center' },
+    margin: { left: margin, right: margin },
+    theme: 'grid'
+  });
+  y = (doc as any).lastAutoTable.finalY + 10;
+
 
   // ── PAGE 2: RESUMO ───────────────────────────────────────
   doc.addPage();
@@ -515,9 +542,36 @@ export async function generatePDF(
     }
   }
 
-  // ── LAST PAGE: SIGNATURE ─────────────────────────────────
+  // ── LAST PAGE: SIGNATURE & METHODOLOGY ───────────────────
   doc.addPage();
-  y = pageH - 60;
+  y = margin;
+  
+  // Methodology Section
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(11);
+  doc.setTextColor(...primaryColor);
+  doc.text('NOTAS TÉCNICAS E METODOLOGIA (MARP)', margin, y);
+  y += 6;
+  
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8);
+  doc.setTextColor(60, 60, 60);
+  
+  const methodologyText = [
+    'Este relatório utiliza a Metodologia de Avaliação de Risco Potencial (MARP), baseada no Roteiro de Inspeção Federal. ',
+    '',
+    '1. ÍNDICE CRÍTICO (IC): Calculado via MÉDIA GEOMÉTRICA das pontuações dos itens críticos (pesos binários 0 ou 3). Por ser geométrica, a falha em um único item crítico penaliza severamente o índice, podendo levar o estabelecimento ao status de INACEITÁVEL imediatamente.',
+    '2. ÍNDICE NÃO CRÍTICO (INC): Calculado via MÉDIA ARITMÉTICA PONDERADA dos itens não críticos, considerando pesos normatizados (1, 2, 5 e 10) conforme impacto na segurança sanitária.',
+    '3. COEFICIENTE DE RISCO (CR): Combinação de IC (peso 0.6) e INC (peso 0.4).',
+    '4. RISCO POTENCIAL (RP): Valor final na escala de 0 a 15, que define a classificação do estabelecimento.',
+    '',
+    'CLASSIFICAÇÕES: Aceitável (RP ≥ 13.5) | Tolerável (12 ≥ RP > 13.5) | Crítico (9 ≥ RP > 12) | Inaceitável (RP < 9).'
+  ].join('\n');
+
+  const methLines = doc.splitTextToSize(methodologyText, contentW);
+  doc.text(methLines, margin, y);
+  y += methLines.length * 4 + 10;
+
   doc.setFont('helvetica', 'italic');
   doc.setFontSize(9);
   doc.setTextColor(90, 90, 90);

@@ -178,6 +178,11 @@ export interface SectionScore {
   notApplicableCount: number;
   notObservedCount: number;
   scorePercentage: number;
+  // MARP metrics
+  ic: number;
+  inc: number;
+  cr: number;
+  rp: number;
 }
 
 export type ScoreClassification = 'critical' | 'regular' | 'good' | 'excellent';
@@ -193,6 +198,11 @@ export interface InspectionScore {
   scorePercentage: number;
   scoreBySection: SectionScore[];
   classification: ScoreClassification;
+  // MARP metrics
+  ic: number;
+  inc: number;
+  cr: number;
+  rp: number;
 }
 
 export interface ConsultantSettings {

@@ -721,7 +721,6 @@ export async function repairSyncStatus() {
 
 /**
  * ✅ REALTIME SYNC (SENIOR IMPLEMENTATION)
-
  * Subscribes to database changes and updates local Dexie DB automatically.
  */
 export function setupRealtime(tenantId: string | undefined) {
@@ -761,6 +760,7 @@ export function setupRealtime(tenantId: string | undefined) {
           const local = await localTable.get(newRecord.id);
           const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
 
+          // Only update if server is newer or local doesn't exist
           if (shouldUpdateLocal(serverUpdate, localUpdate)) {
             let mappedRecord: any = { ...newRecord, synced: 1 };
             
@@ -782,7 +782,10 @@ export function setupRealtime(tenantId: string | undefined) {
                 createdAt: new Date(newRecord.created_at), updatedAt: serverUpdate,
                 completedAt: newRecord.completed_at ? new Date(newRecord.completed_at) : undefined,
                 tenantId: newRecord.tenant_id, synced: 1,
-                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null
+                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null,
+                ilpiCapacity: newRecord.ilpi_capacity, residentsTotal: newRecord.residents_total,
+                dependencyLevel1: newRecord.dependency_level1, dependencyLevel2: newRecord.dependency_level2,
+                dependencyLevel3: newRecord.dependency_level3
               };
             } else if (table === 'responses') {
               mappedRecord = {
@@ -792,6 +795,20 @@ export function setupRealtime(tenantId: string | undefined) {
                 updatedAt: serverUpdate, tenantId: newRecord.tenant_id, synced: 1,
                 deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null,
                 customDescription: newRecord.custom_description
+              };
+            } else if (table === 'photos') {
+              mappedRecord = {
+                id: newRecord.id, responseId: newRecord.response_id, dataUrl: newRecord.data_url,
+                caption: newRecord.caption, takenAt: new Date(newRecord.taken_at),
+                updatedAt: serverUpdate, tenantId: newRecord.tenant_id, synced: 1,
+                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null
+              };
+            } else if (table === 'schedules') {
+              mappedRecord = {
+                id: newRecord.id, clientId: newRecord.client_id, scheduledAt: new Date(newRecord.scheduled_at),
+                status: newRecord.status, notes: newRecord.notes, userId: newRecord.user_id,
+                updatedAt: serverUpdate, tenantId: newRecord.tenant_id, synced: 1,
+                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null
               };
             }
 

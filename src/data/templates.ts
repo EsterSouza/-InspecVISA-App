@@ -503,30 +503,52 @@ export function getTemplateById(id: string): ChecklistTemplate | undefined {
 }
 
 /**
- * Enriches a base template with regional supplements based on client info.
- * Logic:
- * - If ILPI and state is GO -> Merge with templateIlpiGoiasSuplement
+ * Filter sections based on consultant role (Saúde / Nutrição)
+ * This is used for the execution UI, while Summary/PDF uses full=true
  */
-export function enrichTemplate(template: ChecklistTemplate, client: Client): ChecklistTemplate {
-  // 1. ILPI GOIAS Logic
-  if (template.id === 'tpl-ilpi-federal-v1' && client.state === 'GO') {
+function filterSectionsByRole(sections: any[], role: string, full: boolean) {
+  if (full || !role || role === 'ambos') return sections;
+
+  return sections.filter(section => {
+    // Nutrition Sections
+    const isNutrition = ['sec-fed-05', 'sec-fed-06'].includes(section.id);
+    
+    if (role === 'nutricao') return isNutrition;
+    if (role === 'saude') return !isNutrition;
+    
+    return true;
+  });
+}
+
+/**
+ * Main function to get the final template for a specific context.
+ * - Handles Regional Supplements (GO, etc.)
+ * - Handles Role Filtering (Saúde/Nutrição)
+ * - 'full' flag: true for Reports/PDF, false for Execution UI
+ */
+export function getEffectiveTemplate(
+  baseTemplate: ChecklistTemplate, 
+  client: Client, 
+  role?: string, 
+  full: boolean = false
+): ChecklistTemplate {
+  // 1. Initial Deep Copy
+  let effective = JSON.parse(JSON.stringify(baseTemplate));
+
+  // 2. Apply Regional Supplements
+  if (baseTemplate.id === 'tpl-ilpi-federal-v1' && client.state === 'GO') {
     const supplement = templateIlpiGoiasSuplement;
     
-    // Create a deep copy of sections to avoid mutating the base template
-    const sections = JSON.parse(JSON.stringify(template.sections));
-
-    // A. Apply Section Additions (Items that go into existing sections)
+    // A. Apply Section Additions
     supplement.sectionAdditions.forEach(addition => {
-      const targetSection = sections.find((s: any) => s.id === addition.targetSectionId);
+      const targetSection = effective.sections.find((s: any) => s.id === addition.targetSectionId);
       if (targetSection) {
-        // Merge items (preventing duplicate IDs if any)
         const existingIds = new Set(targetSection.items.map((i: any) => i.id));
         addition.items.forEach(newItem => {
           if (!existingIds.has(newItem.id)) {
             targetSection.items.push(newItem);
           }
         });
-        // Sort items by order
         targetSection.items.sort((a: any, b: any) => a.order - b.order);
       }
     });
@@ -534,23 +556,30 @@ export function enrichTemplate(template: ChecklistTemplate, client: Client): Che
     // B. Apply New Sections
     if (supplement.newSections) {
       supplement.newSections.forEach(newSec => {
-        if (!sections.find((s: any) => s.id === newSec.id)) {
-          sections.push(newSec);
+        if (!effective.sections.find((s: any) => s.id === newSec.id)) {
+          effective.sections.push(newSec);
         }
       });
     }
 
-    return {
-      ...template,
-      name: `${template.name} (+ Suplemento GO)`,
-      sections: sections.sort((a: any, b: any) => a.order - b.order)
-    };
+    effective.name = `${baseTemplate.name} (+ Suplemento GO)`;
   }
 
-  // 2. RJ Items (Alimentos) are already baked into separate templates for now, 
-  // but we could add dynamic logic here too if needed.
+  // 3. Apply Multi-professional Filtering
+  effective.sections = filterSectionsByRole(effective.sections, role || '', full);
 
-  return template;
+  // 4. Final Sorting
+  effective.sections.sort((a: any, b: any) => a.order - b.order);
+
+  return effective;
+}
+
+/**
+ * Keeps the old enrichTemplate for backward compatibility if needed, 
+ * but routes to the new getEffectiveTemplate.
+ */
+export function enrichTemplate(template: ChecklistTemplate, client: Client): ChecklistTemplate {
+  return getEffectiveTemplate(template, client, undefined, true);
 }
 
 export function getTotalItems(template: ChecklistTemplate): number {
@@ -562,4 +591,5 @@ export function getCriticalItemsCount(template: ChecklistTemplate): number {
     (sum, s) => sum + s.items.filter(i => i.isCritical).length, 0
   );
 }
+
 

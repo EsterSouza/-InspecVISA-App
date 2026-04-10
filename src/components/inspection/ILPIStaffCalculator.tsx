@@ -32,10 +32,15 @@ function calcRJCaregivers(l1: number, l2: number, l3: number) {
 }
 
 // ─── RJ – Lei 8.049/18: Técnicos de Enfermagem ───────────────
-// 1 técnico para cada 15 residentes nos graus II e III
+// Grau II: 1 técnico para 15 residentes
+// Grau III: 1 técnico para 10 residentes
 function calcRJNursingTechs(l2: number, l3: number) {
-  const total = (l2 + l3) > 0 ? Math.max(1, Math.ceil((l2 + l3) / 15)) : 0;
-  return { total };
+  const reqL2 = l2 > 0 ? Math.max(0, Math.ceil(l2 / 15)) : 0;
+  const reqL3 = l3 > 0 ? Math.max(0, Math.ceil(l3 / 10)) : 0;
+  // A lei exige pelomenos 1 técnico se houver residentes grau II ou III? 
+  // Geralmente sim, vamos manter o Math.max(1, ...) se houver residentes.
+  const total = (l2 + l3) > 0 ? Math.max(1, reqL2 + reqL3) : 0;
+  return { reqL2, reqL3, total };
 }
 
 // ─── Shared display helpers ───────────────────────────────────
@@ -189,7 +194,7 @@ export function ILPIStaffCalculator({
                 : <AlertTriangle className="text-red-600 h-5 w-5" />}
             </div>
             <p className="text-xs text-gray-500">
-              1 técnico para cada 15 residentes nos Graus II e III ({level2 + level3} residentes → mín. <strong>{reqNurse.total}</strong>)
+              Mínimo: 1:15 p/ Grau II ({level2}) e 1:10 p/ Grau III ({level3}) → {reqNurse.total} técnico(s) no total.
             </p>
             <div className="flex items-end justify-between border-t border-gray-200 pt-3">
               <div>

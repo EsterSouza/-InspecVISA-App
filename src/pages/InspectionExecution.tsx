@@ -9,6 +9,7 @@ import { useInspectionStore } from '../store/useInspectionStore';
 import { useSettingsStore } from '../store/useSettingsStore';
 import { generateId, formatDateTime } from '../utils/imageUtils';
 import type { InspectionResponse, InspectionPhoto } from '../types';
+import { CollaborativeProgress } from '../components/inspection/CollaborativeProgress';
 
 import { Button } from '../components/ui/Button';
 import { Card, CardContent } from '../components/ui/Card';
@@ -136,47 +137,41 @@ export function InspectionExecution() {
     loadData();
   }, [location.state?.inspectionId]);
 
-  // Derived state
+  // 🚀 Optimized Template & Role Filtering
   const template = useMemo(() => {
     if (!currentInspection) return null;
     const tpl = getTemplateById(currentInspection.templateId);
     if (!tpl) return null;
     
-    // Convert currentInspection partially to Client for enrichment if it has enough data
-    // Or better, we know currentInspection has foodTypes and category cached.
-    return enrichTemplate(tpl, currentInspection as any);
+    // getEffectiveTemplate handles both state supplements AND role filtering
+    return tpl;
   }, [currentInspection]);
 
-  // Filter sections based on client foodTypes if category is alimentos
-  // and filter by consultantRole if category is ILPI
   const visibleSections = useMemo(() => {
     if (!template || !currentInspection) return [];
     
-    // For Estética, normally show all
-    let sections = template.sections;
+    const role = useSettingsStore.getState().settings.consultantRole || 'saude';
     
-    // 1. Filter by ILPI Consultant Role
-    if (template.category === 'ilpi') {
-      const role = useSettingsStore.getState().settings.consultantRole || 'ambos';
-      const nutritionSections = ['sec-fed-05', 'sec-fed-06']; // Nutrição and Refeitório (Federal)
-      
-      if (role === 'nutricao') {
-        sections = sections.filter(s => nutritionSections.includes(s.id));
-      } else if (role === 'saude') {
-        sections = sections.filter(s => !nutritionSections.includes(s.id));
-      }
-      // if 'ambos', keep all
-    }
+    // Get effective template with role-based filtering for the Execution UI
+    const effective = enrichTemplate(template, currentInspection as any);
+    
+    // Still need additional filtering for 'alimentos' category if applicable
+    let sections = effective.sections;
 
-    // 2. Filter by Alimentos FoodType
     if (template.category === 'alimentos') {
        const clientTypes = currentInspection.foodTypes || [];
        sections = sections.filter(section => {
-        // If section has no applicable types defined, it's global, always show
         if (!section.applicableFoodTypes || section.applicableFoodTypes.length === 0) return true;
-        // If section has types defined, client must have at least one matching type
         return section.applicableFoodTypes.some(t => clientTypes.includes(t));
       });
+    }
+
+    // Role filtering for ILPI (already handled partially in templates.ts, 
+    // but we consolidate here or ensure templates.ts handles it)
+    if (template.category === 'ilpi') {
+       const { getEffectiveTemplate } = require('../data/templates');
+       const roleFiltered = getEffectiveTemplate(template, currentInspection as any, role, false);
+       sections = roleFiltered.sections;
     }
 
     return sections;
@@ -378,6 +373,9 @@ export function InspectionExecution() {
           </Button>
         </div>
       </header>
+
+      {/* Collaborative Progress Bar */}
+      {currentInspection.templateId === 'tpl-ilpi-federal-v1' && <CollaborativeProgress />}
 
       {/* Main Content area with sidebar layout on desktop */}
       <div className="mx-auto w-full max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:grid lg:grid-cols-12 lg:gap-8">

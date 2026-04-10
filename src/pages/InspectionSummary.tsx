@@ -271,7 +271,10 @@ export function InspectionSummary() {
                 className="text-6xl sm:text-7xl font-black tracking-tighter"
                 style={{ color: scoreColor }}
               >
-                {Math.round(scoreArea.scorePercentage)}<span className="text-4xl text-gray-400 font-bold ml-1">%</span>
+                {scoreArea.rp?.toFixed(1) || '0.0'}
+              </div>
+              <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest -mt-2">
+                Risco Potencial MARP
               </div>
               <div 
                 className="px-4 py-1.5 rounded-full text-sm font-bold tracking-widest text-white uppercase mt-4"
@@ -280,6 +283,22 @@ export function InspectionSummary() {
                 {classificationLabel(scoreArea.classification)}
               </div>
           </div>
+
+          <div className="mt-6 flex justify-center gap-8 text-[11px] font-bold text-gray-500 uppercase">
+             <div className="text-center">
+                <div className="text-gray-900 text-lg">{scoreArea.ic?.toFixed(2) || '—'}</div>
+                <div>IC (Crítico)</div>
+             </div>
+             <div className="text-center border-x border-gray-100 px-8">
+                <div className="text-gray-900 text-lg">{scoreArea.inc?.toFixed(2) || '—'}</div>
+                <div>INC (Não Crítico)</div>
+             </div>
+             <div className="text-center">
+                <div className="text-gray-900 text-lg">{Math.round(scoreArea.scorePercentage)}%</div>
+                <div>Conformidade</div>
+             </div>
+          </div>
+
 
           <div className="mt-10 grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-2xl mx-auto border-t border-gray-100 pt-8">
               <div className="flex flex-col items-center">
