@@ -1,6 +1,10 @@
 import { db } from '../db/database';
 import { supabase } from '../lib/supabase';
 import { useAuthStore } from '../store/useAuthStore';
+import type { RealtimeChannel } from '@supabase/supabase-js';
+
+let realtimeChannel: RealtimeChannel | null = null;
+
 
 const withTimeout = <T>(promise: Promise<T>, ms: number = 45000): Promise<T> => {
   return Promise.race([
@@ -23,6 +27,22 @@ async function logSync(level: 'info' | 'warn' | 'error', message: string, detail
   }
 }
 
+function validateRecord(tableName: string, record: any): { valid: boolean; error?: string } {
+  // Basic validation to prevent common DB rejections
+  if (!record.id) return { valid: false, error: 'Missing ID' };
+  
+  if (tableName === 'clients') {
+    if (!record.name || record.name.trim() === '') return { valid: false, error: 'Nome do cliente é obrigatório' };
+    if (!record.category) return { valid: false, error: 'Categoria é obrigatória' };
+  }
+  
+  if (tableName === 'inspections') {
+    if (!record.client_id) return { valid: false, error: 'Client ID ausente' };
+  }
+
+  return { valid: true };
+}
+
 async function safeBatchUpsert(tableName: string, records: any[]): Promise<{ successIds: string[], errors: any[] }> {
   if (records.length === 0) return { successIds: [], errors: [] };
   
@@ -33,27 +53,42 @@ async function safeBatchUpsert(tableName: string, records: any[]): Promise<{ suc
   for (let i = 0; i < records.length; i += CHUNK_SIZE) {
     const chunk = records.slice(i, i + CHUNK_SIZE);
     
+    // Filtrar apenas registros válidos
+    const validChunk = chunk.filter(r => {
+      const v = validateRecord(tableName, r);
+      if (!v.valid) {
+        errors.push({ id: r.id, error: v.error, status: 'validation_failed' });
+        logSync('error', `Falha de validação local em ${tableName} [${r.id}]: ${v.error}`);
+        return false;
+      }
+      return true;
+    });
+
+    if (validChunk.length === 0) continue;
+
     const { error: bulkError } = await withTimeout<any>(
-      Promise.resolve(supabase.from(tableName).upsert(chunk))
+      Promise.resolve(supabase.from(tableName).upsert(validChunk))
     );
 
     if (!bulkError) {
-      successIds.push(...chunk.map(r => r.id));
+      successIds.push(...validChunk.map(r => r.id));
       continue;
     }
 
     await logSync('warn', `Chunk upsert falhou na tabela ${tableName}, processando 1 por 1.`, bulkError);
     
-    for (const record of chunk) {
+    for (const record of validChunk) {
       const { error } = await withTimeout<any>(
         Promise.resolve(supabase.from(tableName).upsert([record]))
       );
       if (!error) {
         successIds.push(record.id);
       } else {
-        errors.push({ id: record.id, error });
+        errors.push({ id: record.id, error, status: 'server_error' });
         if (error.code === '23503') {
-          await logSync('error', `FK Violation on ${tableName} ID ${record.id}: Parent record missing on server.`);
+          await logSync('error', `Violacão de Chave Estrangeira em ${tableName} ID ${record.id}: Registro pai não existe no servidor.`);
+        } else {
+          await logSync('error', `Erro ao salvar ${tableName} [${record.id}]: ${error.message}`, error);
         }
       }
     }
@@ -61,6 +96,7 @@ async function safeBatchUpsert(tableName: string, records: any[]): Promise<{ suc
 
   return { successIds, errors };
 }
+
 
 function shouldUpdateLocal(serverDate: Date, localDate: Date | undefined): boolean {
   if (!localDate) return true;
@@ -255,17 +291,18 @@ export async function syncData(isManual: boolean = false) {
         deleted_at: c.deletedAt || null // ✅ Envia status de deleção
       }));
 
-      const { error: pushError } = await withTimeout<any>(
-        Promise.resolve(supabase.from('clients').upsert(clientsToPush))
-      );
+      const { successIds, errors: pushErrors } = await safeBatchUpsert('clients', clientsToPush);
       
-      if (!pushError) {
-        await db.clients.where('id').anyOf(clientsToPush.map(c => c.id)).modify({ synced: 1 });
-        await logSync('info', '✅ Clientes enviados com sucesso');
-      } else {
-        await logSync('error', '❌ Falha ao enviar Clientes', pushError);
+      if (successIds.length > 0) {
+        await db.clients.where('id').anyOf(successIds).modify({ synced: 1 });
+        await logSync('info', `✅ ${successIds.length} clientes enviados com sucesso`);
+      }
+      
+      if (pushErrors.length > 0) {
+        await logSync('error', `${pushErrors.length} clientes falharam ao subir.`, pushErrors);
       }
     }
+
 
     // PULL CLIENTES (ativos)
     const remoteClients = await pullAllPages('clients');
@@ -620,3 +657,151 @@ export async function syncClientsOnly() {
     (window as any).isSyncingGlobally = false;
   }
 }
+
+/**
+ * ✅ SELF-HEALING (SENIOR DEV TOOL)
+ * Repara o status de sincronização local comparando com o servidor.
+ * Resolve o problema de "registros fantasmas" presos como pendentes.
+ */
+export async function repairSyncStatus() {
+  const { user } = useAuthStore.getState();
+  if (!user) return;
+
+  await logSync('info', '🛠️ Iniciando reparo automático de sincronização...');
+
+  const tables = ['clients', 'inspections', 'responses', 'schedules', 'photos'];
+  let totalFixed = 0;
+
+  for (const table of tables) {
+    const localTable = (db as any)[table];
+    const pending = await localTable.where('synced').notEqual(1).toArray();
+    
+    if (pending.length === 0) continue;
+
+    await logSync('info', `Analisando ${pending.length} pendências em ${table}...`);
+
+    for (const record of pending) {
+      // 1. Verificar se o registro já existe no servidor
+      const serverTable = table === 'photos' ? 'photos' : 
+                         table === 'responses' ? 'responses' : 
+                         table === 'inspections' ? 'inspections' : 
+                         table === 'schedules' ? 'schedules' : 'clients';
+
+      const tenantId = useAuthStore.getState().tenantInfo?.tenantId;
+
+      const { data, error } = await supabase
+        .from(serverTable)
+        .select('id, updated_at, deleted_at')
+        .eq('id', record.id)
+        .eq('tenant_id', tenantId) // Garantia extra de isolamento
+        .maybeSingle();
+
+
+
+      if (data && !error) {
+        // Registro existe no server! 
+        // Se for uma deleção que já foi processada ou se o server está igual/mais novo
+        await localTable.update(record.id, { synced: 1 });
+        totalFixed++;
+      } else if (!data && record.deletedAt) {
+        // É um registro deletado localmente que nunca chegou no server.
+        // Se for muito antigo (mais de 7 dias), removemos fisicamente do local (cleanup)
+        const ageInDays = (new Date().getTime() - new Date(record.updatedAt || record.createdAt).getTime()) / (1000 * 3600 * 24);
+        if (ageInDays > 7) {
+          await localTable.delete(record.id);
+          totalFixed++;
+        }
+      }
+    }
+  }
+
+  await logSync('info', `✅ Reparo concluído. ${totalFixed} registros corrigidos.`);
+  return totalFixed;
+}
+
+/**
+ * ✅ REALTIME SYNC (SENIOR IMPLEMENTATION)
+
+ * Subscribes to database changes and updates local Dexie DB automatically.
+ */
+export function setupRealtime(tenantId: string | undefined) {
+  if (!tenantId) {
+    if (realtimeChannel) {
+      supabase.removeChannel(realtimeChannel);
+      realtimeChannel = null;
+    }
+    return;
+  }
+
+  if (realtimeChannel) return;
+
+  logSync('info', `📡 Configurando Realtime para Tenant: ${tenantId}`);
+
+  realtimeChannel = supabase
+    .channel(`public-changes-${tenantId}`)
+    .on(
+      'postgres_changes',
+      { 
+        event: '*', 
+        schema: 'public', 
+        filter: `tenant_id=eq.${tenantId}` 
+      },
+      async (payload) => {
+        const { table, eventType, new: newRecord, old: oldRecord } = payload;
+        
+        await logSync('info', `🔔 Evento Realtime: ${eventType} em ${table}`);
+
+        const localTable = (db as any)[table];
+        if (!localTable) return;
+
+        if (eventType === 'DELETE') {
+          await localTable.delete(oldRecord.id);
+        } else {
+          const serverUpdate = new Date(newRecord.updated_at || newRecord.created_at);
+          const local = await localTable.get(newRecord.id);
+          const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
+
+          if (shouldUpdateLocal(serverUpdate, localUpdate)) {
+            let mappedRecord: any = { ...newRecord, synced: 1 };
+            
+            // Map Snake Case (PG) to Camel Case (Dexie/TypeScript)
+            if (table === 'clients') {
+              mappedRecord = {
+                id: newRecord.id, name: newRecord.name, cnpj: newRecord.cnpj, address: newRecord.address,
+                category: newRecord.category, foodTypes: newRecord.food_types, city: newRecord.city, state: newRecord.state,
+                responsibleName: newRecord.responsible_name, phone: newRecord.phone, email: newRecord.email,
+                createdAt: new Date(newRecord.created_at), updatedAt: serverUpdate,
+                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null,
+                tenantId: newRecord.tenant_id, synced: 1
+              };
+            } else if (table === 'inspections') {
+              mappedRecord = {
+                id: newRecord.id, clientId: newRecord.client_id, templateId: newRecord.template_id,
+                consultantName: newRecord.consultant_name, inspectionDate: new Date(newRecord.inspection_date),
+                status: newRecord.status, observations: newRecord.observations,
+                createdAt: new Date(newRecord.created_at), updatedAt: serverUpdate,
+                completedAt: newRecord.completed_at ? new Date(newRecord.completed_at) : undefined,
+                tenantId: newRecord.tenant_id, synced: 1,
+                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null
+              };
+            } else if (table === 'responses') {
+              mappedRecord = {
+                id: newRecord.id, inspectionId: newRecord.inspection_id, itemId: newRecord.item_id,
+                result: newRecord.result, situationDescription: newRecord.situation_description,
+                correctiveAction: newRecord.corrective_action, createdAt: new Date(newRecord.created_at),
+                updatedAt: serverUpdate, tenantId: newRecord.tenant_id, synced: 1,
+                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null,
+                customDescription: newRecord.custom_description
+              };
+            }
+
+            await localTable.put(mappedRecord);
+          }
+        }
+      }
+    )
+    .subscribe((status) => {
+      logSync('info', `📡 Status Realtime: ${status}`);
+    });
+}
+

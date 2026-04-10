@@ -17,7 +17,7 @@ export function ILPIStaffCalculator({ level1, level2, level3, currentStaff }: IL
   
   const reqL1 = Math.max(0, Math.ceil(level1 / 20));
   const reqL2 = level2 > 0 ? Math.max(2, Math.ceil(level2 / 10)) : 0;
-  const reqL3 = level3 > 0 ? Math.max(2, Math.ceil(level3 / 5)) : 0;
+  const reqL3 = level3 > 0 ? Math.max(2, Math.ceil(level3 / 6)) : 0;
   
   const totalRequired = reqL1 + reqL2 + reqL3;
   const isCompliant = currentStaff >= totalRequired;

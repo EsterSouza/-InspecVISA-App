@@ -67,6 +67,24 @@ export interface Section {
   items: ChecklistItem[];
 }
 
+// Suplementos Regionais
+export interface SectionAddition {
+  targetSectionId: string;    // ID da seção federal receptora
+  targetSectionTitle: string; // legibilidade no código
+  items: ChecklistItem[];
+}
+
+export interface ChecklistSupplement {
+  id: string;
+  baseTemplateId: string;     // ID do roteiro base
+  state: string;
+  municipality?: string;
+  name: string;
+  version: string;
+  sectionAdditions: SectionAddition[];
+  newSections?: Section[];
+}
+
 export interface ChecklistItem {
   id: string;
   sectionId: string;
@@ -77,6 +95,10 @@ export interface ChecklistItem {
   weight: number;
   isCritical: boolean;
   isRJOnly?: boolean;
+  
+  // Controle de Mescla (Suplementos)
+  replacesItemId?: string;    // Se preenchido, substitui o item federal
+  insertAfterItemId?: string; // Se preenchido, coloca logo após este item federal
 }
 
 export interface Inspection {
@@ -106,6 +128,7 @@ export interface Inspection {
   dependencyLevel1?: number;
   dependencyLevel2?: number;
   dependencyLevel3?: number;
+  observedStaff?: number;
   signatureDataUrl?: string;
   updatedAt?: Date;
   deletedAt?: Date | null;

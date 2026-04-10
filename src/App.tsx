@@ -113,12 +113,26 @@ function App() {
     window.addEventListener('visibilitychange', handleVisibility);
     const interval = setInterval(backgroundSync, 2 * 60 * 1000);
 
+    // ✅ Setup Realtime
+    const tenantId = useAuthStore.getState().tenantInfo?.tenantId;
+    import('./services/syncService').then(m => m.setupRealtime(tenantId));
+
     return () => {
       window.removeEventListener('online', backgroundSync);
       window.removeEventListener('visibilitychange', handleVisibility);
       clearInterval(interval);
+      // Cleanup Realtime is handled inside setupRealtime(undefined)
+      import('./services/syncService').then(m => m.setupRealtime(undefined));
     };
   }, [initialized, user]);
+
+  const tenantId = useAuthStore((s) => s.tenantInfo?.tenantId);
+  useEffect(() => {
+    if (initialized && user && tenantId) {
+      import('./services/syncService').then(m => m.setupRealtime(tenantId));
+    }
+  }, [initialized, user, tenantId]);
+
 
   const name = useSettingsStore((s) => s.settings.name);
 

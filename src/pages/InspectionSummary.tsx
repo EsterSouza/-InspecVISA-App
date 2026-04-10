@@ -166,6 +166,14 @@ export function InspectionSummary() {
             >
               {isEditing ? 'Cancelar' : 'Editar Info'}
             </Button>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => navigate('/execute', { state: { inspectionId: currentInspection.id }})} 
+              className="text-primary-600 border-primary-200 hover:bg-primary-50"
+            >
+              Editar Respostas
+            </Button>
           </div>
           <div className="flex space-x-2">
             <Button onClick={handleGeneratePDF} disabled={isGenerating}>

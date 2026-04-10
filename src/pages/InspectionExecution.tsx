@@ -72,16 +72,48 @@ export function InspectionExecution() {
           insp.state = client.state;
         }
 
-        const resps = await db.responses
+        // 🚀 Mapeamento de reparo de IDs legado para evitar perda de dados em rascunhos
+        let resps = await db.responses
           .where('inspectionId').equals(id)
-          .filter(r => !r.deletedAt) // ✅ SOFT DELETE
+          .filter(r => !r.deletedAt)
           .toArray();
+
+        // Se detectarmos IDs antigos (ilpi-) ou template ID antigo, migramos para o novo padrão (fed-)
+        const isLegacy = insp.templateId === 'tpl-ilpi-v1' || resps.some(r => r.itemId.startsWith('ilpi-'));
+
+        if (isLegacy) {
+          console.log('Migrando rascunho legado para o novo padrão federal (fed-)...');
+          
+          const migratedResps = resps.map(r => {
+            if (r.itemId.startsWith('ilpi-')) {
+              return { ...r, itemId: r.itemId.replace('ilpi-', 'fed-') };
+            }
+            // Também migrar referências a seções em itens extras
+            if (r.itemId.startsWith('extra|sec-ilpi-')) {
+              return { ...r, itemId: r.itemId.replace('sec-ilpi-', 'sec-fed-') };
+            }
+            return r;
+          });
+
+          // Atualizar no banco para persistir a migração
+          for (const r of migratedResps) {
+            await db.responses.update(r.id, { itemId: r.itemId });
+          }
+
+          // Atualizar o ID do template na inspeção
+          if (insp.templateId !== 'tpl-ilpi-federal-v1') {
+            await db.inspections.update(insp.id, { templateId: 'tpl-ilpi-federal-v1' });
+            insp.templateId = 'tpl-ilpi-federal-v1';
+          }
+
+          resps = migratedResps;
+        }
         
         // Load photos for each response
         for (const r of resps) {
           r.photos = await db.photos
             .where('responseId').equals(r.id)
-            .filter(p => !p.deletedAt) // ✅ SOFT DELETE
+            .filter(p => !p.deletedAt)
             .toArray();
         }
 
@@ -126,7 +158,7 @@ export function InspectionExecution() {
     // 1. Filter by ILPI Consultant Role
     if (template.category === 'ilpi') {
       const role = useSettingsStore.getState().settings.consultantRole || 'ambos';
-      const nutritionSections = ['sec-ilpi-05', 'sec-ilpi-06']; // Nutrição and Refeitório
+      const nutritionSections = ['sec-fed-05', 'sec-fed-06']; // Nutrição and Refeitório (Federal)
       
       if (role === 'nutricao') {
         sections = sections.filter(s => nutritionSections.includes(s.id));
@@ -293,7 +325,7 @@ export function InspectionExecution() {
   const handleConfirmFinish = async () => {
     if (!currentInspection || !signature) return;
 
-    if (window.confirm('Confirmar o encerramento da inspeção? Após finalizada ela não poderá ser alterada.')) {
+    if (window.confirm('Confirmar o encerramento da inspeção? Você poderá reabri-la posteriormente caso precise alterar algo.')) {
       await db.inspections.update(currentInspection.id, {
         status: 'completed',
         completedAt: new Date(),
@@ -377,7 +409,7 @@ export function InspectionExecution() {
                 defaultExpanded={idx === 0 || expandedSectionIds.includes(section.id)}
               >
                 <div className="space-y-4">
-                  {section.id === 'sec-ilpi-12' && (
+                  {section.id === 'sec-fed-12' && (
                     <div className="space-y-4 mb-6">
                       <div className="bg-white border rounded-lg p-4 shadow-sm space-y-3">
                         <div className="flex items-center justify-between">
@@ -432,10 +464,7 @@ export function InspectionExecution() {
                         level2={currentInspection.dependencyLevel2 || 0}
                         level3={currentInspection.dependencyLevel3 || 0}
                         currentStaff={
-                          // We sum technical staff + caregivers found in responses if they are 'complies'? 
-                          // No, the user should input how many they observed.
-                          // I'll add a 'Total Observado' field.
-                          (currentInspection as any).observedStaff || 0
+                          currentInspection.observedStaff || 0
                         }
                       />
                       
@@ -445,11 +474,11 @@ export function InspectionExecution() {
                         <input 
                           type="number" 
                           placeholder="Qtd atual..."
-                          value={(currentInspection as any).observedStaff || ''}
+                          value={currentInspection.observedStaff || ''}
                           onChange={(e) => {
                             const val = parseInt(e.target.value) || 0;
-                            db.inspections.update(currentInspection.id, { observedStaff: val } as any);
-                            setCurrentInspection({...currentInspection, observedStaff: val} as any);
+                            db.inspections.update(currentInspection.id, { observedStaff: val });
+                            setCurrentInspection({...currentInspection, observedStaff: val});
                           }}
                           className="w-20 border rounded px-2 py-1 text-sm font-bold ml-auto"
                         />

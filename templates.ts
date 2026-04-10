@@ -486,6 +486,7 @@ export const templates: ChecklistTemplate[] = [
       },
     ],
   },
+];
 
 // ── HELPERS ──────────────────────────────────────────────────
 

@@ -42,6 +42,10 @@ const Debug: React.FC = () => {
       const allInspections = await db.inspections.toArray();
       const allSchedules = await db.schedules.toArray();
       
+      const pendingClients = allClients.filter(c => c.synced !== 1);
+      const pendingInspections = allInspections.filter(i => i.synced !== 1);
+      const pendingSchedules = allSchedules.filter(s => s.synced !== 1);
+
       setReport({
         'Totais Locais': {
           'Clientes': allClients.length,
@@ -49,15 +53,20 @@ const Debug: React.FC = () => {
           'Schedules': allSchedules.length
         },
         'Pendentes de Sincronização': {
-          'Clientes': allClients.filter(c => c.synced !== 1).length,
-          'Inspeções': allInspections.filter(i => i.synced !== 1).length,
-          'Schedules': allSchedules.filter(s => s.synced !== 1).length
+          'Clientes': pendingClients.length,
+          'Inspeções': pendingInspections.length,
+          'Schedules': pendingSchedules.length
+        },
+        'Detalhes dos Pendentes': {
+          'IDs Clientes': pendingClients.length > 0 ? pendingClients.map(c => `${c.name || 'Sem Nome'} (${c.id.substring(0,8)})`).join(', ') : 'NENHUM',
+          'IDs Inspeções': pendingInspections.length > 0 ? pendingInspections.map(i => i.id.substring(0,8)).join(', ') : 'NENHUM'
         }
       });
     } finally {
       setIsRunning(false);
     }
   };
+
 
   const runManualSync = async () => {
     setIsRunning(true);
@@ -102,14 +111,36 @@ const Debug: React.FC = () => {
             <Search size={18} />
             Executar Diagnóstico
           </button>
-          <button
-            onClick={runManualSync}
-            disabled={isRunning}
-            className="flex items-center gap-2 justify-center px-4 py-3 bg-green-600 text-white rounded-xl font-semibold hover:bg-green-700 disabled:opacity-50"
-          >
-            <RefreshCw size={18} className={isRunning ? 'animate-spin' : ''} />
-            Sync Manual
-          </button>
+            <button
+              onClick={runManualSync}
+              disabled={isRunning}
+              className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-white font-medium hover:bg-green-700 disabled:opacity-50 transition-all"
+            >
+              <RefreshCw className={`h-4 w-4 ${isRunning ? 'animate-spin' : ''}`} />
+              Sincronizar Agora
+            </button>
+            <button
+              onClick={async () => {
+                setIsRunning(true);
+                try {
+                  const m = await import('../services/syncService');
+                  const fixed = await m.repairSyncStatus();
+                  alert(`Reparo concluído! ${fixed} registros foram corrigidos.`);
+                  await runDiagnostic();
+                } catch (e) {
+                  console.error(e);
+                  alert('Falha ao executar reparo.');
+                } finally {
+                  setIsRunning(false);
+                }
+              }}
+              disabled={isRunning}
+              className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-white font-medium hover:bg-amber-700 disabled:opacity-50 transition-all font-mono text-xs"
+            >
+              <Wrench className="h-4 w-4" />
+              AUTO-REPARAR SYNC
+            </button>
+
         </div>
 
         {/* Diagnostic Report */}

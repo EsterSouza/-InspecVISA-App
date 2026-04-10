@@ -183,6 +183,23 @@ export function ChecklistItem({
               {isNotCompliant ? 'Ação corretiva necessária' : 'Sugestões de melhoria profissional'}
               {isNotCompliant && <span className="text-red-500"> *</span>}
             </label>
+            {isNotCompliant && (
+              <div className="flex flex-wrap gap-1.5 pb-1">
+                {['Providenciar', 'Substituir', 'Implementar', 'Abolir', 'Adequar'].map((verb) => (
+                  <button
+                    key={verb}
+                    onClick={() => {
+                      const current = (response?.correctiveAction || '').trim();
+                      const prefix = current ? `${current} \n- ` : '- ';
+                      onUpdateDetails({ correctiveAction: `${prefix}${verb} ` });
+                    }}
+                    className="text-[11px] font-medium bg-white hover:bg-primary-50 text-gray-600 hover:text-primary-700 border border-gray-200 hover:border-primary-200 rounded-full px-2 py-0.5 transition-colors shadow-sm"
+                  >
+                    {verb}
+                  </button>
+                ))}
+              </div>
+            )}
             <textarea
                className={cn(
                 "w-full rounded-md border p-3 text-sm focus:outline-none focus:ring-2 disabled:opacity-50 min-h-[100px] resize-y shadow-sm",

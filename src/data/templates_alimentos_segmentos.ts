@@ -51,7 +51,8 @@
 //   irregulares. Prazo: encerrado em 01/04/2026.
 // ============================================================
 
-import { type Section, type ChecklistItem } from '../types';
+import type { Section, ChecklistItem } from '../types';
+
 
 // ── HELPER ──────────────────────────────────────────────────
 // Mapeia serviceType → IDs das seções extras a carregar
@@ -69,6 +70,7 @@ export const segmentSectionMap: Record<string, string[]> = {
 
 // ── SEÇÕES ADICIONAIS ────────────────────────────────────────
 export const extraSections: Section[] = [
+
 
   // ══════════════════════════════════════════════════════════
   // 1. PADARIA / CONFEITARIA
@@ -844,6 +846,7 @@ export function getExtraSections(
   serviceTypes: string[],
   state?: string
 ): Section[] {
+
   const isRJ = state === 'RJ';
   const sectionIds = new Set<string>();
 
