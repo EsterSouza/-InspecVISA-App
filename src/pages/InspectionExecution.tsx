@@ -2,7 +2,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Save, FileCheck2, Loader2, PlusCircle, Info, Users2, WifiOff } from 'lucide-react';
 import { db } from '../db/database';
-import { getTemplateById, enrichTemplate } from '../data/templates';
+import { getTemplateById, enrichTemplate, getEffectiveTemplate } from '../data/templates';
 import { FOOD_SEGMENT_LABELS, type FoodEstablishmentType } from '../types';
 import { ILPIStaffCalculator } from '../components/inspection/ILPIStaffCalculator';
 import { useInspectionStore } from '../store/useInspectionStore';
@@ -166,10 +166,8 @@ export function InspectionExecution() {
       });
     }
 
-    // Role filtering for ILPI (already handled partially in templates.ts, 
-    // but we consolidate here or ensure templates.ts handles it)
+    // Role filtering for ILPI
     if (template.category === 'ilpi') {
-       const { getEffectiveTemplate } = require('../data/templates');
        const roleFiltered = getEffectiveTemplate(template, currentInspection as any, role, false);
        sections = roleFiltered.sections;
     }
