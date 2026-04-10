@@ -72,12 +72,42 @@ export function InspectionExecution() {
           insp.state = client.state;
         }
 
-        // Carregar respostas existentes para esta inspeção
-        const resps = await db.responses
+        // 🚀 Mapeamento de reparo de IDs legado para evitar perda de dados em rascunhos
+        let resps = await db.responses
           .where('inspectionId').equals(id)
           .filter(r => !r.deletedAt)
           .toArray();
-        
+
+        // Se detectarmos IDs antigos (ilpi-) ou template ID antigo, migramos para o novo padrão (fed-)
+        const isLegacy = insp.templateId === 'tpl-ilpi-v1' || resps.some(r => r.itemId.startsWith('ilpi-'));
+
+        if (isLegacy) {
+          console.log('Migrando rascunho legado para o novo padrão federal (fed-)...');
+          
+          const migratedResps = resps.map(r => {
+            if (r.itemId.startsWith('ilpi-')) {
+              return { ...r, itemId: r.itemId.replace('ilpi-', 'fed-') };
+            }
+            // Também migrar referências a seções em itens extras
+            if (r.itemId.startsWith('extra|sec-ilpi-')) {
+              return { ...r, itemId: r.itemId.replace('sec-ilpi-', 'sec-fed-') };
+            }
+            return r;
+          });
+
+          // Atualizar no banco para persistir a migração
+          for (const r of migratedResps) {
+            await db.responses.update(r.id, { itemId: r.itemId });
+          }
+
+          // Atualizar o ID do template na inspeção
+          if (insp.templateId !== 'tpl-ilpi-federal-v1') {
+            await db.inspections.update(insp.id, { templateId: 'tpl-ilpi-federal-v1' });
+            insp.templateId = 'tpl-ilpi-federal-v1';
+          }
+
+          resps = migratedResps;
+        }
         
         // Load photos for each response
         for (const r of resps) {
