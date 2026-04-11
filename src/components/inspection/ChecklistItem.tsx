@@ -1,6 +1,6 @@
 import React from 'react';
 import { AlertTriangle, ExternalLink, LogIn, FileCheck2 } from 'lucide-react';
-import { cn } from '../ui/Button';
+import { cn } from '../../lib/utils';
 import { Badge } from '../ui/Badge';
 import { PhotoCapture } from './PhotoCapture';
 import type { ChecklistItem as ItemType, InspectionResponse, InspectionPhoto } from '../../types';

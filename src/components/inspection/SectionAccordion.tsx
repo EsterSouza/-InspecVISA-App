@@ -1,6 +1,6 @@
 import React from 'react';
 import { ChevronDown, ChevronUp, CheckCircle, AlertTriangle, HelpCircle } from 'lucide-react';
-import { cn } from '../ui/Button';
+import { cn } from '../../lib/utils';
 
 interface SectionAccordionProps {
   title: React.ReactNode;
