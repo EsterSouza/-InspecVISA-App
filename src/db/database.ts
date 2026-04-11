@@ -195,3 +195,11 @@ export async function deleteInspection(inspectionId: string) {
   }
   await db.inspections.update(inspectionId, { deletedAt: now, synced: navigator.onLine ? 1 : 0, updatedAt: now });
 }
+
+export async function deleteSchedule(scheduleId: string) {
+  const now = new Date();
+  if (navigator.onLine) {
+    await supabase.from('schedules').update({ deleted_at: now }).eq('id', scheduleId);
+  }
+  await db.schedules.update(scheduleId, { deletedAt: now, synced: navigator.onLine ? 1 : 0, updatedAt: now });
+}
