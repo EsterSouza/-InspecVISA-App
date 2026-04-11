@@ -495,11 +495,11 @@ export function getTemplates(): ChecklistTemplate[] {
 }
 
 export function getTemplatesByCategory(category: string): ChecklistTemplate[] {
-  return templates.filter(t => t.category === category);
+  return templates.filter((t: ChecklistTemplate) => t.category === category);
 }
 
 export function getTemplateById(id: string): ChecklistTemplate | undefined {
-  return templates.find(t => t.id === id);
+  return templates.find((t: ChecklistTemplate) => t.id === id);
 }
 
 /**
@@ -511,13 +511,13 @@ function filterSectionsByRole(sections: any[], role: string, full: boolean) {
 
   // Identify sections that belong to Nutrition (Hardcoded for Federal ILPI)
   const nutritionSectionIds = ['sec-fed-05', 'sec-fed-06'];
-  const templateHasNutrition = sections.some(s => nutritionSectionIds.includes(s.id));
+  const templateHasNutrition = sections.some((s: any) => nutritionSectionIds.includes(s.id));
 
   // If the template doesn't have these nutrition sections (e.g. Estética),
   // don't filter anything - show full template.
   if (!templateHasNutrition) return sections;
 
-  return sections.filter(section => {
+  return sections.filter((section: any) => {
     const isNutrition = nutritionSectionIds.includes(section.id);
     
     if (role === 'nutricao') return isNutrition;
@@ -575,9 +575,9 @@ export function getEffectiveTemplate(
   // 3. Apply Food Segment Filtering (Alimentos)
   if (baseTemplate.category === 'alimentos') {
     const foodTypes = (client as any).foodTypes || [];
-    effective.sections = effective.sections.filter(section => {
+    effective.sections = effective.sections.filter((section: any) => {
       if (!section.applicableFoodTypes || section.applicableFoodTypes.length === 0) return true;
-      return section.applicableFoodTypes.some(t => foodTypes.includes(t));
+      return section.applicableFoodTypes.some((t: string) => foodTypes.includes(t));
     });
   }
 
@@ -599,12 +599,12 @@ export function enrichTemplate(template: ChecklistTemplate, client: Client): Che
 }
 
 export function getTotalItems(template: ChecklistTemplate): number {
-  return template.sections.reduce((sum, s) => sum + s.items.length, 0);
+  return template.sections.reduce((sum: number, s: any) => sum + s.items.length, 0);
 }
 
 export function getCriticalItemsCount(template: ChecklistTemplate): number {
   return template.sections.reduce(
-    (sum, s) => sum + s.items.filter(i => i.isCritical).length, 0
+    (sum: number, s: any) => sum + s.items.filter((i: any) => i.isCritical).length, 0
   );
 }
 

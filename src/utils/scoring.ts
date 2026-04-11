@@ -14,29 +14,29 @@ function calcMARPValues(items: ChecklistItem[], responseMap: Map<string, Inspect
     return res.result === 'complies' ? 3 : 0;
   };
 
-  const criticals = items.filter(i => i.isCritical);
-  const nonCriticals = items.filter(i => !i.isCritical);
+  const criticals = items.filter((i: ChecklistItem) => i.isCritical);
+  const nonCriticals = items.filter((i: ChecklistItem) => !i.isCritical);
 
   // 1. IC (Índice Crítico) - Média Geométrica
   let ic = 3; 
   if (criticals.length > 0) {
-    const product = criticals.reduce((acc, item) => acc * binaryScore(item.id), 1);
+    const product = criticals.reduce((acc: number, item: ChecklistItem) => acc * binaryScore(item.id), 1);
     ic = Math.pow(product, 1 / criticals.length);
   }
 
   // 2. INC (Índice Não Crítico) - Média Aritmética Ponderada
   let inc = 3;
   if (nonCriticals.length > 0) {
-    const activeNonCriticals = nonCriticals.filter(i => {
+    const activeNonCriticals = nonCriticals.filter((i: ChecklistItem) => {
       const r = responseMap.get(i.id);
       return !r || (r.result !== 'not_applicable' && r.result !== 'not_observed');
     });
 
     if (activeNonCriticals.length > 0) {
-      const weightedSum = activeNonCriticals.reduce((acc, item) => {
+      const weightedSum = activeNonCriticals.reduce((acc: number, item: ChecklistItem) => {
         return acc + (binaryScore(item.id) * item.weight);
       }, 0);
-      const totalWeight = activeNonCriticals.reduce((acc, item) => acc + item.weight, 0);
+      const totalWeight = activeNonCriticals.reduce((acc: number, item: ChecklistItem) => acc + item.weight, 0);
       inc = totalWeight > 0 ? weightedSum / totalWeight : 3;
     }
   }
@@ -56,24 +56,24 @@ function calcMARPValues(items: ChecklistItem[], responseMap: Map<string, Inspect
  * Main score calculation for the entire inspection
  */
 export function calculateScore(responses: InspectionResponse[], sections: Section[]): InspectionScore {
-  const allItems = sections.flatMap(s => s.items);
-  const itemIds = new Set(allItems.map(i => i.id));
+  const allItems = sections.flatMap((s: Section) => s.items);
+  const itemIds = new Set(allItems.map((i: ChecklistItem) => i.id));
   
   // ISOLATION: Only consider responses for items that exist in the CURRENT template sections
   // This avoids "ghost" responses from other templates or versions.
-  const relevantResponses = responses.filter(r => r && r.itemId && itemIds.has(r.itemId));
+  const relevantResponses = responses.filter((r: InspectionResponse) => r && r.itemId && itemIds.has(r.itemId));
 
   const responseMap = new Map<string, InspectionResponse>(
-    relevantResponses.map(r => [r.itemId, r] as [string, InspectionResponse])
+    relevantResponses.map((r: InspectionResponse) => [r.itemId, r] as [string, InspectionResponse])
   );
 
   // Global counts for valid responses (Bug 3: items with no response or 'not_evaluated' are ignored here)
-  const evaluatedResponses = relevantResponses.filter(r => r.result && r.result !== 'not_evaluated');
+  const evaluatedResponses = relevantResponses.filter((r: InspectionResponse) => r.result && r.result !== 'not_evaluated');
   
-  const compliesCount = evaluatedResponses.filter(r => r.result === 'complies').length;
-  const notCompliesCount = evaluatedResponses.filter(r => r.result === 'not_complies').length;
-  const notApplicableCount = evaluatedResponses.filter(r => r.result === 'not_applicable').length;
-  const notObservedCount = evaluatedResponses.filter(r => r.result === 'not_observed').length;
+  const compliesCount = evaluatedResponses.filter((r: InspectionResponse) => r.result === 'complies').length;
+  const notCompliesCount = evaluatedResponses.filter((r: InspectionResponse) => r.result === 'not_complies').length;
+  const notApplicableCount = evaluatedResponses.filter((r: InspectionResponse) => r.result === 'not_applicable').length;
+  const notObservedCount = evaluatedResponses.filter((r: InspectionResponse) => r.result === 'not_observed').length;
   
   // Bug 1: totalItems is strictly the items present in the composed sections (the 97)
   const totalItemsCount = allItems.length;
@@ -90,14 +90,14 @@ export function calculateScore(responses: InspectionResponse[], sections: Sectio
   const globalMarp = calcMARPValues(allItems, responseMap);
 
   // Section-by-section MARP calculation
-  const scoreBySection: SectionScore[] = sections.map(s => {
+  const scoreBySection: SectionScore[] = sections.map((s: Section) => {
     const sectionItems = s.items;
-    const sItemIds = new Set(sectionItems.map(i => i.id));
-    const sectionResponses = relevantResponses.filter(r => sItemIds.has(r.itemId));
+    const sItemIds = new Set(sectionItems.map((i: ChecklistItem) => i.id));
+    const sectionResponses = relevantResponses.filter((r: InspectionResponse) => sItemIds.has(r.itemId));
     
-    const sEvaluated = sectionResponses.filter(r => r.result && r.result !== 'not_evaluated');
-    const sComplies = sEvaluated.filter(r => r.result === 'complies').length;
-    const sNotComplies = sEvaluated.filter(r => r.result === 'not_complies').length;
+    const sEvaluated = sectionResponses.filter((r: InspectionResponse) => r.result && r.result !== 'not_evaluated');
+    const sComplies = sEvaluated.filter((r: InspectionResponse) => r.result === 'complies').length;
+    const sNotComplies = sEvaluated.filter((r: InspectionResponse) => r.result === 'not_complies').length;
     const sDenom = sComplies + sNotComplies;
     
     const sectionMarp = calcMARPValues(sectionItems, responseMap);
@@ -109,8 +109,8 @@ export function calculateScore(responses: InspectionResponse[], sections: Sectio
       evaluatedItems: sEvaluated.length,
       compliesCount: sComplies,
       notCompliesCount: sNotComplies,
-      notApplicableCount: sEvaluated.filter(r => r.result === 'not_applicable').length,
-      notObservedCount: sEvaluated.filter(r => r.result === 'not_observed').length,
+      notApplicableCount: sEvaluated.filter((r: InspectionResponse) => r.result === 'not_applicable').length,
+      notObservedCount: sEvaluated.filter((r: InspectionResponse) => r.result === 'not_observed').length,
       scorePercentage: sDenom > 0 ? (sComplies / sDenom) * 100 : 0,
       ...sectionMarp
     };
