@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   Home, Users, ClipboardCheck, PlusCircle, Settings,
-  ShieldCheck, LogOut, RefreshCw, Calendar, User,
+  ShieldCheck, LogOut, RefreshCw, Calendar, User, BookOpen,
 } from 'lucide-react';
 import { useSettingsStore } from '../../store/useSettingsStore';
 import { useAuthStore } from '../../store/useAuthStore';
@@ -90,6 +90,29 @@ export function Sidebar() {
             </NavLink>
           );
         })}
+
+        {tenantInfo?.role === 'admin' && (
+          <>
+            <div className="my-4 h-px bg-gray-100" />
+            <NavLink
+              to="/admin"
+              className={({ isActive }) =>
+                `flex w-full items-center space-x-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                  isActive
+                    ? 'bg-primary-50 text-primary-700'
+                    : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900 font-semibold'
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  <BookOpen className={`h-5 w-5 ${isActive ? 'text-primary-600 stroke-2' : 'text-gray-400'}`} />
+                  <span>Painel de Gestão</span>
+                </>
+              )}
+            </NavLink>
+          </>
+        )}
       </nav>
 
       <div className="border-t border-gray-100 p-4">

@@ -1,6 +1,6 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
-import { Home, Users, ClipboardCheck, PlusCircle, Settings, RefreshCw, User, Calendar } from 'lucide-react';
+import { Home, Users, ClipboardCheck, PlusCircle, Settings, RefreshCw, User, Calendar, BookOpen } from 'lucide-react';
 import { useAuthStore } from '../../store/useAuthStore';
 import { syncData } from '../../services/syncService';
 
@@ -82,6 +82,25 @@ export function BottomNav() {
             <RefreshCw className={`h-5 w-5 ${isSyncing ? 'animate-spin text-primary-600' : ''}`} />
             <span className="text-[10px] font-medium">Sync</span>
           </button>
+        )}
+
+        {/* Mobile Gestão (Admin Only) */}
+        {tenantInfo?.role === 'admin' && (
+          <NavLink
+            to="/admin"
+            className={({ isActive }) => `flex flex-col items-center justify-center space-y-1 p-2 ${
+              isActive ? 'text-primary-600' : 'text-gray-500 hover:text-gray-900'
+            }`}
+          >
+            {({ isActive }) => (
+              <>
+                <BookOpen className={`h-5 w-5 ${isActive ? 'fill-primary-50 stroke-primary-600' : ''}`} />
+                <span className={`text-[10px] font-medium ${isActive ? 'font-semibold' : ''}`}>
+                  Gestão
+                </span>
+              </>
+            )}
+          </NavLink>
         )}
 
         {/* Settings/Ajustes moved to last position as requested for staff */}
