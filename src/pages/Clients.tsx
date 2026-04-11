@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
-import { Search, Plus, Building2, Phone, MapPin, Edit2, Trash2 } from 'lucide-react';
+import { Search, Plus, Building2, Phone, MapPin, Edit2, Trash2, Loader2, WifiOff } from 'lucide-react';
 import { db, deleteClient } from '../db/database';
 import { type Client, type ClientCategory, type FoodEstablishmentType, FOOD_SEGMENT_LABELS } from '../types';
 import { Button } from '../components/ui/Button';
@@ -8,10 +8,7 @@ import { Card } from '../components/ui/Card';
 import { Badge } from '../components/ui/Badge';
 import { Modal } from '../components/ui/Modal';
 import { generateId } from '../utils/imageUtils';
-
 import { useNavigate } from 'react-router-dom';
-import { syncClientsOnly } from '../services/syncService';
-import { Loader2, WifiOff } from 'lucide-react';
 
 export function Clients() {
   const navigate = useNavigate();
@@ -20,15 +17,13 @@ export function Clients() {
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [search, setSearch] = useState('');
   const [filterCat, setFilterCat] = useState<ClientCategory | 'all'>('all');
-  const [isSyncing, setIsSyncing] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [isLoading, setIsLoading] = useState(false);
   
   const { register, handleSubmit, watch, reset, formState: { errors } } = useForm<Client>();
 
   const loadClients = async () => {
     let list = await db.clients.orderBy('createdAt').reverse().toArray();
-    
-    // ✅ SOFT DELETE: Remove registros marcados como deletados
     list = list.filter(c => !c.deletedAt);
 
     if (filterCat !== 'all') {
@@ -45,16 +40,6 @@ export function Clients() {
   useEffect(() => { loadClients(); }, [search, filterCat]);
 
   useEffect(() => {
-    const handleSync = async () => {
-      if (isOnline) {
-        setIsSyncing(true);
-        await syncClientsOnly();
-        await loadClients();
-        setIsSyncing(false);
-      }
-    };
-    handleSync();
-
     const updateOnlineStatus = () => setIsOnline(navigator.onLine);
     window.addEventListener('online', updateOnlineStatus);
     window.addEventListener('offline', updateOnlineStatus);
@@ -62,39 +47,24 @@ export function Clients() {
       window.removeEventListener('online', updateOnlineStatus);
       window.removeEventListener('offline', updateOnlineStatus);
     };
-  }, [isOnline]);
+  }, []);
 
   const onSubmit = async (data: Client) => {
+    setIsLoading(true);
     try {
-      if (editingClient) {
-        // Update existing client
-        const updatedClient: Client = {
-          ...editingClient,
-          ...data,
-          // category change might require cleanup but we keep it simple for now
-        };
-        
-        if (updatedClient.category !== 'alimentos') {
-          delete updatedClient.foodTypes;
-        }
+      const clientToSave: Client = editingClient 
+        ? { ...editingClient, ...data }
+        : { ...data, id: generateId(), createdAt: new Date() };
 
-        await db.clients.put(updatedClient);
-      } else {
-        // Create new client
-        const newClient: Client = {
-          ...data,
-          id: generateId(),
-          createdAt: new Date(),
-        };
-        
-        if (newClient.category !== 'alimentos') {
-          delete newClient.foodTypes;
-        } else if (!newClient.foodTypes || newClient.foodTypes.length === 0) {
-          newClient.foodTypes = ['servico_alimentacao'];
-        }
-
-        await db.clients.add(newClient);
+      // Limpeza de campos específicos de categoria
+      if (clientToSave.category !== 'alimentos') {
+        delete clientToSave.foodTypes;
+      } else if (!clientToSave.foodTypes || clientToSave.foodTypes.length === 0) {
+        clientToSave.foodTypes = ['servico_alimentacao'];
       }
+
+      // ✅ ONLINE-DIRECT UPSERT: Salva na nuvem e atualiza cache local
+      await db.onlineUpsert('clients', clientToSave, db.clients);
 
       setIsModalOpen(false);
       setEditingClient(null);
@@ -102,7 +72,9 @@ export function Clients() {
       loadClients();
     } catch (err) {
       console.error(err);
-      alert('Erro ao salvar cliente: ' + (err instanceof Error ? err.message : String(err)));
+      alert('Erro ao salvar cliente.');
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -115,7 +87,7 @@ export function Clients() {
 
   const handleDelete = async (client: Client, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (window.confirm(`Deseja realmente excluir o cliente "${client.name}"? Todas as inspeções e fotos associadas serão apagadas permanentemente.`)) {
+    if (window.confirm(`Deseja realmente excluir o cliente "${client.name}"?`)) {
       try {
         await deleteClient(client.id);
         loadClients();
@@ -128,13 +100,6 @@ export function Clients() {
 
   const selectedCategory = watch('category');
 
-  const categoryOptions = [
-    { value: 'all', label: 'Todos' },
-    { value: 'estetica', label: 'Estética' },
-    { value: 'ilpi', label: 'ILPI' },
-    { value: 'alimentos', label: 'Alimentos' }
-  ];
-
   return (
     <div className="mx-auto max-w-4xl p-4 sm:p-6 lg:p-8">
       <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -143,26 +108,13 @@ export function Clients() {
           <p className="text-sm text-gray-500">Gerencie seus estabelecimentos.</p>
         </div>
         <div className="flex items-center gap-3">
-          {isSyncing && (
-            <div className="flex items-center text-primary-600 text-sm font-medium animate-pulse">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Sincronizando...
-            </div>
-          )}
           {!isOnline && (
             <div className="flex items-center text-amber-600 text-sm font-medium">
-              <WifiOff className="mr-2 h-4 w-4" />
-              Offline
+              <WifiOff className="mr-2 h-4 w-4" /> Offline
             </div>
           )}
-          <Button 
-            onClick={() => setIsModalOpen(true)} 
-            className="w-full sm:w-auto"
-            disabled={!isOnline}
-            title={!isOnline ? "Conecte-se à internet para cadastrar novos clientes" : ""}
-          >
-            <Plus className="mr-2 h-5 w-5" />
-            Novo Cliente
+          <Button onClick={() => setIsModalOpen(true)} className="w-full sm:w-auto shadow-lg shadow-primary-100">
+            <Plus className="mr-2 h-5 w-5" /> Novo Cliente
           </Button>
         </div>
       </div>
@@ -173,77 +125,59 @@ export function Clients() {
           <input
             type="text"
             placeholder="Buscar por nome, CNPJ..."
-            className="h-10 w-full rounded-md border border-gray-300 pl-10 pr-4 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500"
+            className="h-10 w-full rounded-xl border border-gray-200 pl-10 pr-4 text-sm focus:ring-2 focus:ring-primary-500 outline-none"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
         <select
-          className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 bg-white"
+          className="h-10 w-full rounded-xl border border-gray-200 px-3 text-sm focus:ring-2 focus:ring-primary-500 outline-none bg-white"
           value={filterCat}
           onChange={(e) => setFilterCat(e.target.value as any)}
         >
-          {categoryOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+          <option value="all">Todas Categorias</option>
+          <option value="estetica">Estética</option>
+          <option value="ilpi">ILPI</option>
+          <option value="alimentos">Alimentos</option>
         </select>
       </div>
 
       <div className="space-y-4">
         {clients.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-gray-300 py-12 text-center text-gray-500">
+          <div className="rounded-2xl border-2 border-dashed border-gray-200 py-12 text-center text-gray-500 bg-white">
             Nenhum cliente encontrado.
           </div>
         ) : (
           clients.map(client => (
             <Card 
               key={client.id} 
-              className="p-4 sm:p-5 hover:bg-gray-50 transition-colors cursor-pointer"
+              className="p-5 hover:border-primary-200 hover:shadow-md transition-all cursor-pointer group"
               onClick={() => navigate(`/clients/${client.id}`)}
             >
               <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900">{client.name}</h3>
-                  <div className="mt-1 flex flex-wrap gap-2 text-sm text-gray-500">
-                     {client.cnpj && <span>CNPJ: {client.cnpj}</span>}
-                     {client.cnpj && <span className="hidden sm:inline">•</span>}
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold text-gray-900 group-hover:text-primary-700 transition-colors">{client.name}</h3>
+                  <div className="mt-1 flex flex-wrap gap-2">
                      <Badge variant={
                        client.category === 'estetica' ? 'success' : 
                        client.category === 'ilpi' ? 'warning' : 'default'
                      }>
                        {client.category.toUpperCase()}
                      </Badge>
-                     {client.category === 'alimentos' && client.foodTypes && client.foodTypes.map(ft => (
+                     {client.category === 'alimentos' && client.foodTypes?.map(ft => (
                        <Badge key={ft} variant="outline" className="bg-yellow-50 text-yellow-700 border-yellow-200">
                          {FOOD_SEGMENT_LABELS[ft as FoodEstablishmentType] || ft}
                        </Badge>
                      ))}
                   </div>
-                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2 text-sm text-gray-600">
-                    {client.responsibleName && (
-                      <div className="flex items-center"><Building2 className="mr-2 h-4 w-4" /> {client.responsibleName}</div>
-                    )}
-                    {client.phone && (
-                      <div className="flex items-center"><Phone className="mr-2 h-4 w-4" /> {client.phone}</div>
-                    )}
-                    {client.address && (
-                      <div className="flex items-center col-span-1 sm:col-span-2"><MapPin className="mr-2 h-4 w-4 flex-shrink-0" /> <span className="truncate">{client.address}</span></div>
-                    )}
+                  <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 text-sm text-gray-600">
+                    {client.phone && <div className="flex items-center"><Phone className="mr-2 h-4 w-4 text-gray-400" /> {client.phone}</div>}
+                    {client.address && <div className="flex items-center col-span-1 sm:col-span-2"><MapPin className="mr-2 h-4 w-4 text-gray-400" /> {client.address}</div>}
                   </div>
                 </div>
-                <div className="flex gap-2 self-start ml-4">
-                  <button 
-                    onClick={(e) => handleEdit(client, e)}
-                    className="p-2 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-lg transition-colors"
-                    title="Editar"
-                  >
-                    <Edit2 className="h-5 w-5" />
-                  </button>
-                  <button 
-                    onClick={(e) => handleDelete(client, e)}
-                    className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
-                    title="Excluir"
-                  >
-                    <Trash2 className="h-5 w-5" />
-                  </button>
+                <div className="flex gap-1 ml-4 group-hover:opacity-100 opacity-0 transition-opacity">
+                  <button onClick={(e) => handleEdit(client, e)} className="p-2 text-gray-400 hover:text-primary-600 hover:bg-primary-50 rounded-xl"><Edit2 className="h-5 w-5" /></button>
+                  <button onClick={(e) => handleDelete(client, e)} className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl"><Trash2 className="h-5 w-5" /></button>
                 </div>
               </div>
             </Card>
@@ -251,142 +185,58 @@ export function Clients() {
         )}
       </div>
 
-      <Modal 
-        isOpen={isModalOpen} 
-        onClose={() => { setIsModalOpen(false); setEditingClient(null); reset(); }} 
-        title={editingClient ? "Editar Cliente" : "Cadastrar Novo Cliente"}
-      >
-        <form id="client-form" onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+      <Modal isOpen={isModalOpen} onClose={() => { setIsModalOpen(false); setEditingClient(null); reset(); }} title={editingClient ? "Editar Cliente" : "Novo Cliente"}>
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <div>
             <label className="block text-sm font-medium text-gray-700">Nome do Estabelecimento *</label>
-            <input 
-              {...register('name', { required: true })} 
-              className="mt-1 h-10 w-full rounded-md border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500" 
-            />
-            {errors.name && <span className="text-xs text-red-500">Campo obrigatório</span>}
+            <input {...register('name', { required: true })} className="mt-1 h-11 w-full rounded-xl border border-gray-200 px-4 focus:ring-2 focus:ring-primary-500 outline-none" />
+            {errors.name && <span className="text-xs text-red-500">Obrigatório</span>}
           </div>
 
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700">Categoria *</label>
-              <select 
-                {...register('category', { required: true })}
-                className="mt-1 h-10 w-full rounded-md border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white"
-              >
-                <option value="">Selecione...</option>
-                <option value="estetica">Estética e Beleza</option>
+              <select {...register('category', { required: true })} className="mt-1 h-11 w-full rounded-xl border border-gray-200 px-4 focus:ring-2 focus:ring-primary-500 outline-none bg-white">
+                <option value="estetica">Estética</option>
                 <option value="ilpi">ILPI</option>
                 <option value="alimentos">Alimentos</option>
               </select>
-              {errors.category && <span className="text-xs text-red-500">Campo obrigatório</span>}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700">CNPJ</label>
-              <input {...register('cnpj')} className="mt-1 h-10 w-full rounded-md border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500" />
+              <input {...register('cnpj')} className="mt-1 h-11 w-full rounded-xl border border-gray-200 px-4 focus:ring-2 focus:ring-primary-500 outline-none" />
             </div>
           </div>
 
           {selectedCategory === 'alimentos' && (
-            <div className="rounded-md border border-yellow-200 bg-yellow-50 p-4">
-              <label className="block text-sm font-medium text-gray-800 mb-2">Tipos de Serviço de Alimentação</label>
-              <p className="text-xs text-gray-600 mb-3 hover:text-gray-900">
-                Selecione os tipos para habilitar seções específicas no roteiro de inspeção.
-              </p>
+            <div className="rounded-2xl border border-yellow-200 bg-yellow-50/50 p-4 space-y-3">
+              <label className="block text-xs font-bold uppercase text-yellow-800 tracking-wider">Tipos de Serviço</label>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-                <label className="flex items-center space-x-2">
-                  <input type="checkbox" value="servico_alimentacao" {...register('foodTypes')} className="rounded text-primary-600 focus:ring-primary-500" />
-                  <span>Restaurante / Lanchonete</span>
-                </label>
-                <label className="flex items-center space-x-2">
-                  <input type="checkbox" value="panificacao_confeitaria" {...register('foodTypes')} className="rounded text-primary-600 focus:ring-primary-500" />
-                  <span>Padaria / Confeitaria</span>
-                </label>
-                <label className="flex items-center space-x-2">
-                  <input type="checkbox" value="mercado_varejo" {...register('foodTypes')} className="rounded text-primary-600 focus:ring-primary-500" />
-                  <span>Mercado / Hortifrúti</span>
-                </label>
-                <label className="flex items-center space-x-2">
-                  <input type="checkbox" value="manipulacao_carnes" {...register('foodTypes')} className="rounded text-primary-600 focus:ring-primary-500" />
-                  <span>Açougue / Peixaria</span>
-                </label>
-                <label className="flex items-center space-x-2">
-                  <input type="checkbox" value="pescados_crus" {...register('foodTypes')} className="rounded text-primary-600 focus:ring-primary-500" />
-                  <span>Japonês / Pescados Crus</span>
-                </label>
-                <label className="flex items-center space-x-2">
-                  <input type="checkbox" value="dark_kitchen" {...register('foodTypes')} className="rounded text-primary-600 focus:ring-primary-500" />
-                  <span>Dark Kitchen / Delivery</span>
-                </label>
-                <label className="flex items-center space-x-2">
-                  <input type="checkbox" value="bebidas_sorvetes" {...register('foodTypes')} className="rounded text-primary-600 focus:ring-primary-500" />
-                  <span>Sorveteria / Lanchonete / Café</span>
-                </label>
-                <label className="flex items-center space-x-2">
-                  <input type="checkbox" value="catering_eventos" {...register('foodTypes')} className="rounded text-primary-600 focus:ring-primary-500" />
-                  <span>Buffet / Catering</span>
-                </label>
-                 <label className="flex items-center space-x-2">
-                  <input type="checkbox" value="industria_artesanal" {...register('foodTypes')} className="rounded text-primary-600 focus:ring-primary-500" />
-                  <span>Indústria Artesanal</span>
-                </label>
+                {Object.entries(FOOD_SEGMENT_LABELS).map(([val, label]) => (
+                  <label key={val} className="flex items-center space-x-2">
+                    <input type="checkbox" value={val} {...register('foodTypes')} className="rounded text-primary-600" />
+                    <span className="text-gray-700">{label}</span>
+                  </label>
+                ))}
               </div>
             </div>
           )}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700">Responsável pelo local</label>
-            <input {...register('responsibleName')} className="mt-1 h-10 w-full rounded-md border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500" />
-          </div>
-
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Telefone</label>
-              <input {...register('phone')} className="mt-1 h-10 w-full rounded-md border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500" />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">E-mail</label>
-              <input {...register('email')} type="email" className="mt-1 h-10 w-full rounded-md border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500" />
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
+          <div className="grid grid-cols-2 gap-4 pt-2">
+            <div className="col-span-2 sm:col-span-1">
               <label className="block text-sm font-medium text-gray-700">Cidade</label>
-              <input {...register('city')} placeholder="Ex: Rio de Janeiro" className="mt-1 h-10 w-full rounded-md border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500" />
+              <input {...register('city')} className="mt-1 h-11 w-full rounded-xl border border-gray-200 px-4 focus:ring-2 focus:ring-primary-500 outline-none" />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700">Estado (UF)</label>
-              <select 
-                {...register('state')}
-                className="mt-1 h-10 w-full rounded-md border border-gray-300 px-3 focus:outline-none focus:ring-2 focus:ring-primary-500 bg-white"
-              >
-                <option value="">Selecione...</option>
-                <option value="AC">AC</option><option value="AL">AL</option><option value="AP">AP</option>
-                <option value="AM">AM</option><option value="BA">BA</option><option value="CE">CE</option>
-                <option value="DF">DF</option><option value="ES">ES</option><option value="GO">GO</option>
-                <option value="MA">MA</option><option value="MT">MT</option><option value="MS">MS</option>
-                <option value="MG">MG</option><option value="PA">PA</option><option value="PB">PB</option>
-                <option value="PR">PR</option><option value="PE">PE</option><option value="PI">PI</option>
-                <option value="RJ">RJ</option><option value="RN">RN</option><option value="RS">RS</option>
-                <option value="RO">RO</option><option value="RR">RR</option><option value="SC">SC</option>
-                <option value="SP">SP</option><option value="SE">SE</option><option value="TO">TO</option>
-              </select>
+            <div className="col-span-2 sm:col-span-1">
+              <label className="block text-sm font-medium text-gray-700">Estado</label>
+              <input {...register('state')} className="mt-1 h-11 w-full rounded-xl border border-gray-200 px-4 focus:ring-2 focus:ring-primary-500 outline-none" />
             </div>
           </div>
 
-           <div>
-            <label className="block text-sm font-medium text-gray-700">Endereço Completo</label>
-            <textarea {...register('address')} rows={2} className="mt-1 w-full rounded-md border border-gray-300 p-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500 resize-none" />
-          </div>
-
-          <div className="mt-6 flex justify-end space-x-3 pt-4 border-t border-gray-100">
+          <div className="pt-6 border-t flex justify-end gap-3">
             <Button variant="outline" type="button" onClick={() => setIsModalOpen(false)}>Cancelar</Button>
-            <Button 
-              type="submit" 
-              form="client-form"
-              disabled={!isOnline}
-            >
-              {isOnline ? 'Salvar Cliente' : 'Sem Internet'}
+            <Button type="submit" disabled={isLoading}>
+              {isLoading ? <Loader2 className="animate-spin h-4 w-4" /> : 'Confirmar e Salvar'}
             </Button>
           </div>
         </form>

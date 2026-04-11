@@ -5,9 +5,13 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card'
 import { compressImage } from '../utils/imageUtils';
 import { db } from '../db/database';
 import { exportDatabase, importDatabase } from '../utils/backup';
-import { Save, Upload, Trash2, Moon, Sun, Monitor, Database, Download, RefreshCw, Bug, LogOut } from 'lucide-react';
+import { 
+  Save, Upload, Trash2, Database, Download, RefreshCw, 
+  Bug, LogOut, Loader2, ShieldCheck, Wifi 
+} from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuthStore } from '../store/useAuthStore';
+import { forcePushFinalData } from '../utils/forceSync';
 
 export function Settings() {
   const { settings, updateSettings, clearData } = useSettingsStore();
@@ -23,6 +27,7 @@ export function Settings() {
       const dataUrl = await compressImage(file, 400, 0.9); // smaller for logo
       updateSettings({ logoDataUrl: dataUrl });
     } catch (err) {
+      console.error('Logo upload error:', err);
       alert('Erro ao processar logotipo.');
     }
     if (fileInputRef.current) fileInputRef.current.value = '';
@@ -76,8 +81,27 @@ export function Settings() {
           db.photos.clear(),
         ]);
         clearData();
-        alert('Todos os dados foram apagados.');
         window.location.reload();
+      }
+    }
+  };
+
+  const [syncing, setSyncing] = useState(false);
+  const handleForceSync = async () => {
+    if (!navigator.onLine) {
+      alert('Você precisa estar online para realizar a migração final.');
+      return;
+    }
+    
+    if (window.confirm('Isso enviará todos os registros locais que ainda não estão na nuvem. Deseja iniciar a migração final?')) {
+      setSyncing(true);
+      try {
+        const result = await forcePushFinalData();
+        alert(`Migração Concluída!\nEnviados: ${result.totalSynced}\nErros: ${result.errors}`);
+      } catch (err) {
+        alert('Erro durante o push: ' + err);
+      } finally {
+        setSyncing(false);
       }
     }
   };
@@ -279,6 +303,28 @@ export function Settings() {
                <p>Ao importar os arquivos delas no seu computador "Mestre", o Dashboard mostrará a média e as recorrências de **todas** as inspeções somadas.</p>
              </div>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="bg-primary-50 border-primary-200">
+        <CardHeader>
+          <CardTitle className="flex items-center text-primary-900">
+            <Wifi className="mr-2 h-5 w-5" />
+            Migração Final (Online-Direct)
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-sm text-primary-700 mb-4">
+            Como migramos para uma arquitetura <strong>100% Online</strong>, use este botão para garantir que qualquer dado antigo do seu celular seja enviado agora para a nuvem.
+          </p>
+          <Button 
+            onClick={handleForceSync} 
+            disabled={syncing}
+            className="w-full bg-primary-600 hover:bg-primary-700 shadow-lg shadow-primary-200 py-6"
+          >
+            {syncing ? <Loader2 className="animate-spin mr-2" /> : <ShieldCheck className="mr-2 h-5 w-5" />}
+            {syncing ? 'Sincronizando...' : 'SINCRONIZAR TUDO AGORA'}
+          </Button>
         </CardContent>
       </Card>
 

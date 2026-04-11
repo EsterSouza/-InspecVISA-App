@@ -92,13 +92,14 @@ export interface ChecklistItem {
   description: string;
   legislation?: string;
   legislationUrl?: string;
+  legislationId?: string; // Novo campo para link com a biblioteca central
   weight: number;
   isCritical: boolean;
   isRJOnly?: boolean;
   
-  // Controle de Mescla (Suplementos)
-  replacesItemId?: string;    // Se preenchido, substitui o item federal
-  insertAfterItemId?: string; // Se preenchido, coloca logo após este item federal
+  // Controle de Mescla (Suplementos / Dinâmicos)
+  replacesItemId?: string;
+  insertAfterItemId?: string;
 }
 
 export interface Inspection {

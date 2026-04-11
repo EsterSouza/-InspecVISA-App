@@ -283,13 +283,10 @@ export async function syncData(isManual: boolean = false) {
     if (pendingClients.length > 0) {
       await logSync('info', `📤 Enviando ${pendingClients.length} clientes...`);
       
-      const clientsToPush = pendingClients.map(c => ({
-        id: c.id, name: c.name, cnpj: c.cnpj, address: c.address, category: c.category,
-        food_types: c.foodTypes, responsible_name: c.responsibleName, phone: c.phone,
-        email: c.email, created_at: c.createdAt, updated_at: c.updatedAt || new Date(),
-        user_id: user.id, city: c.city, state: c.state,
-        deleted_at: c.deletedAt || null // ✅ Envia status de deleção
-      }));
+      const clientsToPush = pendingClients.map(c => {
+        const mapped = (db as any).mapToPostgres('clients', c);
+        return { ...mapped, user_id: user.id }; // Inject user_id which is session-specific
+      });
 
       const { successIds, errors: pushErrors } = await safeBatchUpsert('clients', clientsToPush);
       
@@ -357,19 +354,10 @@ export async function syncData(isManual: boolean = false) {
     if (pendingInspec.length > 0) {
       await logSync('info', `📤 Enviando ${pendingInspec.length} inspeções...`);
       
-      const recordsToPush = pendingInspec.map(i => ({
-        id: i.id, client_id: i.clientId, template_id: i.templateId,
-        consultant_name: i.consultantName, inspection_date: i.inspectionDate,
-        status: i.status, observations: i.observations, created_at: i.createdAt,
-        completed_at: i.completedAt, user_id: user.id,
-        ilpi_capacity: i.ilpiCapacity, residents_total: i.residentsTotal,
-        residents_male: i.residentsMale, residents_female: i.residentsFemale,
-        dependency_level1: i.dependencyLevel1, dependency_level2: i.dependencyLevel2,
-        dependency_level3: i.dependencyLevel3, accompanist_name: i.accompanistName,
-        accompanist_role: i.accompanistRole, signature_data_url: i.signatureDataUrl,
-        updated_at: i.updatedAt || new Date(),
-        deleted_at: i.deletedAt || null // ✅ Soft delete
-      }));
+      const recordsToPush = pendingInspec.map(i => {
+        const mapped = (db as any).mapToPostgres('inspections', i);
+        return { ...mapped, user_id: user.id };
+      });
       
       const { successIds, errors } = await safeBatchUpsert('inspections', recordsToPush);
       if (successIds.length > 0) await db.inspections.where('id').anyOf(successIds).modify({ synced: 1 });
@@ -429,14 +417,10 @@ export async function syncData(isManual: boolean = false) {
     if (pendingResponses.length > 0) {
       await logSync('info', `📤 Enviando ${pendingResponses.length} respostas...`);
       
-      const recordsToPush = pendingResponses.map(r => ({
-        id: r.id, inspection_id: r.inspectionId, item_id: r.itemId,
-        result: r.result, situation_description: r.situationDescription,
-        corrective_action: r.correctiveAction, created_at: r.createdAt,
-        updated_at: r.updatedAt || new Date(), user_id: user.id, 
-        custom_description: r.customDescription,
-        deleted_at: r.deletedAt || null
-      }));
+      const recordsToPush = pendingResponses.map(r => {
+        const mapped = (db as any).mapToPostgres('responses', r);
+        return { ...mapped, user_id: user.id };
+      });
       
       const { successIds } = await safeBatchUpsert('responses', recordsToPush);
       if (successIds.length > 0) await db.responses.where('id').anyOf(successIds).modify({ synced: 1 });
@@ -503,12 +487,10 @@ export async function syncData(isManual: boolean = false) {
     if (pendingPhotos.length > 0) {
       await logSync('info', `📤 Enviando ${pendingPhotos.length} fotos...`);
       
-      const recordsToPush = pendingPhotos.map(p => ({
-        id: p.id, response_id: p.responseId, data_url: p.dataUrl,
-        caption: p.caption, taken_at: p.takenAt, user_id: user.id,
-        updated_at: p.updatedAt || new Date(),
-        deleted_at: p.deletedAt || null
-      }));
+      const recordsToPush = pendingPhotos.map(p => {
+        const mapped = (db as any).mapToPostgres('photos', p);
+        return { ...mapped, user_id: user.id };
+      });
       
       const { successIds } = await safeBatchUpsert('photos', recordsToPush);
       if (successIds.length > 0) await db.photos.where('id').anyOf(successIds).modify({ synced: 1 });
@@ -561,12 +543,10 @@ export async function syncData(isManual: boolean = false) {
     if (pendingSchedules.length > 0) {
       await logSync('info', `📤 Enviando ${pendingSchedules.length} agendamentos...`);
       
-      const recordsToPush = pendingSchedules.map(s => ({
-        id: s.id, client_id: s.clientId, scheduled_at: s.scheduledAt,
-        status: s.status, notes: s.notes, user_id: s.user_id || user.id,
-        updated_at: s.updatedAt || new Date(),
-        deleted_at: s.deletedAt || null 
-      }));
+      const recordsToPush = pendingSchedules.map(s => {
+        const mapped = (db as any).mapToPostgres('schedules', s);
+        return { ...mapped, user_id: s.user_id || user.id };
+      });
       
       const { successIds } = await safeBatchUpsert('schedules', recordsToPush);
       if (successIds.length > 0) {
@@ -720,105 +700,11 @@ export async function repairSyncStatus() {
 }
 
 /**
- * ✅ REALTIME SYNC (SENIOR IMPLEMENTATION)
- * Subscribes to database changes and updates local Dexie DB automatically.
+ * 📡 REALTIME SYNC (DESATIVADO)
+ * Desativado em favor da arquitetura Online-Primary para evitar erros de canal.
  */
-export function setupRealtime(tenantId: string | undefined) {
-  if (!tenantId) {
-    if (realtimeChannel) {
-      supabase.removeChannel(realtimeChannel);
-      realtimeChannel = null;
-    }
-    return;
-  }
-
-  if (realtimeChannel) return;
-
-  logSync('info', `📡 Configurando Realtime para Tenant: ${tenantId}`);
-
-  realtimeChannel = supabase
-    .channel(`public-changes-${tenantId}`)
-    .on(
-      'postgres_changes',
-      { 
-        event: '*', 
-        schema: 'public', 
-        filter: `tenant_id=eq.${tenantId}` 
-      },
-      async (payload) => {
-        const { table, eventType, new: newRecord, old: oldRecord } = payload;
-        
-        await logSync('info', `🔔 Evento Realtime: ${eventType} em ${table}`);
-
-        const localTable = (db as any)[table];
-        if (!localTable) return;
-
-        if (eventType === 'DELETE') {
-          await localTable.delete(oldRecord.id);
-        } else {
-          const serverUpdate = new Date(newRecord.updated_at || newRecord.created_at);
-          const local = await localTable.get(newRecord.id);
-          const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
-
-          // Only update if server is newer or local doesn't exist
-          if (shouldUpdateLocal(serverUpdate, localUpdate)) {
-            let mappedRecord: any = { ...newRecord, synced: 1 };
-            
-            // Map Snake Case (PG) to Camel Case (Dexie/TypeScript)
-            if (table === 'clients') {
-              mappedRecord = {
-                id: newRecord.id, name: newRecord.name, cnpj: newRecord.cnpj, address: newRecord.address,
-                category: newRecord.category, foodTypes: newRecord.food_types, city: newRecord.city, state: newRecord.state,
-                responsibleName: newRecord.responsible_name, phone: newRecord.phone, email: newRecord.email,
-                createdAt: new Date(newRecord.created_at), updatedAt: serverUpdate,
-                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null,
-                tenantId: newRecord.tenant_id, synced: 1
-              };
-            } else if (table === 'inspections') {
-              mappedRecord = {
-                id: newRecord.id, clientId: newRecord.client_id, templateId: newRecord.template_id,
-                consultantName: newRecord.consultant_name, inspectionDate: new Date(newRecord.inspection_date),
-                status: newRecord.status, observations: newRecord.observations,
-                createdAt: new Date(newRecord.created_at), updatedAt: serverUpdate,
-                completedAt: newRecord.completed_at ? new Date(newRecord.completed_at) : undefined,
-                tenantId: newRecord.tenant_id, synced: 1,
-                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null,
-                ilpiCapacity: newRecord.ilpi_capacity, residentsTotal: newRecord.residents_total,
-                dependencyLevel1: newRecord.dependency_level1, dependencyLevel2: newRecord.dependency_level2,
-                dependencyLevel3: newRecord.dependency_level3
-              };
-            } else if (table === 'responses') {
-              mappedRecord = {
-                id: newRecord.id, inspectionId: newRecord.inspection_id, itemId: newRecord.item_id,
-                result: newRecord.result, situationDescription: newRecord.situation_description,
-                correctiveAction: newRecord.corrective_action, createdAt: new Date(newRecord.created_at),
-                updatedAt: serverUpdate, tenantId: newRecord.tenant_id, synced: 1,
-                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null,
-                customDescription: newRecord.custom_description
-              };
-            } else if (table === 'photos') {
-              mappedRecord = {
-                id: newRecord.id, responseId: newRecord.response_id, dataUrl: newRecord.data_url,
-                caption: newRecord.caption, takenAt: new Date(newRecord.taken_at),
-                updatedAt: serverUpdate, tenantId: newRecord.tenant_id, synced: 1,
-                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null
-              };
-            } else if (table === 'schedules') {
-              mappedRecord = {
-                id: newRecord.id, clientId: newRecord.client_id, scheduledAt: new Date(newRecord.scheduled_at),
-                status: newRecord.status, notes: newRecord.notes, userId: newRecord.user_id,
-                updatedAt: serverUpdate, tenantId: newRecord.tenant_id, synced: 1,
-                deletedAt: newRecord.deleted_at ? new Date(newRecord.deleted_at) : null
-              };
-            }
-
-            await localTable.put(mappedRecord);
-          }
-        }
-      }
-    )
-    .subscribe((status) => {
-      logSync('info', `📡 Status Realtime: ${status}`);
-    });
+export function setupRealtime(_tenantId: string | undefined) {
+  // Realtime desativado para estabilidade.
+  return;
 }
 

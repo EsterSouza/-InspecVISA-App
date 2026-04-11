@@ -1,10 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import { db, initializeDatabase } from './db/database';
+import { initializeDatabase } from './db/database';
 import { getTemplates } from './data/templates';
 import { useSettingsStore } from './store/useSettingsStore';
+import { useAuthStore } from './store/useAuthStore';
 import { Loader2, AlertCircle } from 'lucide-react';
-import { Button } from './components/ui/Button';
 
 // Layout
 import { Sidebar } from './components/layout/Sidebar';
@@ -21,14 +21,16 @@ import { Settings } from './pages/Settings';
 import { ClientDetails } from './pages/ClientDetails';
 import { Schedules } from './pages/Schedules';
 import { ImportLegacyData } from './pages/ImportLegacyData';
-
-import { useAuthStore } from './store/useAuthStore';
-import { Login } from './pages/Login';
+import { Debug } from './pages/Debug';
 import { AccessDenied } from './pages/AccessDenied';
-import Debug from './pages/Debug';
+
+import { AdminLayout } from './components/layout/AdminLayout';
+import { AdminTemplates } from './pages/admin/AdminTemplates';
+import { SmartImporter } from './pages/admin/SmartImporter';
 import { ProtectedRoute } from './components/ProtectedRoute';
-import { ClientRoute } from './components/ClientRoute';
 import { ProfileSelection } from './pages/ProfileSelection';
+import { Login } from './pages/Login';
+import { LegislationsManager } from './pages/admin/LegislationsManager';
 
 function App() {
   const [isInitializing, setIsInitializing] = useState(true);
@@ -44,42 +46,51 @@ function App() {
     }
   }, [theme]);
 
+  const doReset = () => {
+    localStorage.clear();
+    const req = indexedDB.deleteDatabase('InspectionDB');
+    req.onsuccess = () => window.location.reload();
+    req.onerror = () => window.location.reload();
+    req.onblocked = () => window.location.reload();
+  };
+
   useEffect(() => {
     let didCancel = false;
 
-    const doReset = () => {
-      localStorage.clear();
-      const req = indexedDB.deleteDatabase('InspectionDB');
-      req.onsuccess = () => window.location.reload();
-      req.onerror = () => window.location.reload();
-      req.onblocked = () => window.location.reload();
-    };
-
     const initApp = async () => {
-      // Safety timeout: if stuck for 12s, force-show error screen
       const timeout = setTimeout(() => {
         if (!didCancel) {
           setInitError(true);
           setIsInitializing(false);
         }
-      }, 12000);
+      }, 15000);
 
       try {
         await initialize();
-        const templates = getTemplates();
-        await initializeDatabase(templates);
+        
+        let remoteTemplates = [];
+        if (navigator.onLine) {
+          try {
+            const { TemplateService } = await import('./services/templateService');
+            remoteTemplates = await TemplateService.listTemplates();
+          } catch (tErr) {
+            console.warn('[App] Falha ao buscar roteiros remotos:', tErr);
+          }
+        }
+
+        const staticTemplates = getTemplates();
+        await initializeDatabase([...staticTemplates, ...remoteTemplates]);
+        
         if (!didCancel) setIsInitializing(false);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('[App] Init failed:', err);
-        // Auto-recover: backing store errors can't be fixed without a reset
+        const error = err as Error;
         const isBackingStoreError =
-          err?.name === 'UnknownError' ||
-          err?.message?.includes('backing store') ||
-          err?.inner?.name === 'UnknownError';
+          error?.name === 'UnknownError' ||
+          error?.message?.includes('backing store');
 
         if (isBackingStoreError) {
-          console.warn('[App] Backing store corrupt. Auto-resetting...');
-          doReset(); // ← RESET AUTOMÁTICO, sem precisar clicar em nada
+          doReset();
           return;
         }
 
@@ -94,135 +105,100 @@ function App() {
 
     initApp();
     return () => { didCancel = true; };
-  }, []); // ← Sem dependências: só roda UMA vez ao montar
+  }, [initialize]);
 
-  // Background Auto-Sync Hook
+  // Online Status & Sync Recovery
   useEffect(() => {
     if (!initialized || !user) return;
 
-    const backgroundSync = () => {
-      if (navigator.onLine && !(window as any).isSyncingGlobally) {
+    const syncPendingData = async () => {
+      if (navigator.onLine) {
+        // Envia qualquer dado que ficou pendente no Dexie enquanto estava sem sinal
         import('./services/syncService').then(m => m.syncData().catch(console.error));
       }
     };
 
-    window.addEventListener('online', backgroundSync);
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') backgroundSync();
-    };
-    window.addEventListener('visibilitychange', handleVisibility);
-    const interval = setInterval(backgroundSync, 2 * 60 * 1000);
-
-    // ✅ Setup Realtime
-    const tenantId = useAuthStore.getState().tenantInfo?.tenantId;
-    import('./services/syncService').then(m => m.setupRealtime(tenantId));
+    window.addEventListener('online', syncPendingData);
+    const interval = setInterval(syncPendingData, 5 * 60 * 1000); // 5 min check
 
     return () => {
-      window.removeEventListener('online', backgroundSync);
-      window.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('online', syncPendingData);
       clearInterval(interval);
-      // Cleanup Realtime is handled inside setupRealtime(undefined)
-      import('./services/syncService').then(m => m.setupRealtime(undefined));
     };
   }, [initialized, user]);
 
-  const tenantId = useAuthStore((s) => s.tenantInfo?.tenantId);
-  useEffect(() => {
-    if (initialized && user && tenantId) {
-      import('./services/syncService').then(m => m.setupRealtime(tenantId));
-    }
-  }, [initialized, user, tenantId]);
-
-
   const name = useSettingsStore((s) => s.settings.name);
 
-  const handleEmergencyReset = () => {
-    localStorage.clear();
-    const req = indexedDB.deleteDatabase('InspectionDB');
-    req.onsuccess = () => window.location.reload();
-    req.onerror = () => window.location.reload();
-    req.onblocked = () => window.location.reload();
-  };
+  if (initError) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center bg-red-50 p-6 text-center">
+        <AlertCircle className="h-12 w-12 text-red-600 mb-4" />
+        <h2 className="text-xl font-bold text-red-900 mb-2">Erro na Inicialização</h2>
+        <p className="text-red-700 mb-6 max-w-xs mx-auto">
+          Ocorreu um problema ao carregar os dados locais. Clique abaixo para tentar recuperar seu acesso.
+        </p>
+        <button
+          onClick={doReset}
+          className="rounded-lg bg-red-600 px-6 py-3 text-white font-bold hover:bg-red-700 transition-all"
+        >
+          🔄 Recuperar App
+        </button>
+      </div>
+    );
+  }
+
+  if (!initialized || isInitializing) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center bg-gray-50">
+        <Loader2 className="h-10 w-10 animate-spin text-primary-600 mb-4" />
+        <p className="text-gray-500 font-medium">Conectando ao InspecVISA...</p>
+      </div>
+    );
+  }
+
+  if (!user) return <Login />;
+  if (!name) return <ProfileSelection />;
 
   return (
     <BrowserRouter>
-      {initError ? (
-        <div className="flex h-screen flex-col items-center justify-center bg-red-50 p-6 text-center">
-          <AlertCircle className="h-12 w-12 text-red-600 mb-4" />
-          <h2 className="text-xl font-bold text-red-900 mb-2">Banco de Dados Corrompido</h2>
-          <p className="text-red-700 mb-6 max-w-xs mx-auto">
-            O banco de dados local está danificado. Clique em <strong>"Recuperar App"</strong> para limpar e reconectar à nuvem. Seus dados salvos na nuvem não serão perdidos.
-          </p>
-          <div className="flex flex-col gap-3 w-full max-w-xs">
-            <button
-              onClick={handleEmergencyReset}
-              className="w-full rounded-lg bg-red-600 px-4 py-3 text-white font-bold hover:bg-red-700 active:scale-95 transition-all"
-            >
-              🔄 Recuperar App
-            </button>
-            <button
-              onClick={() => window.location.reload()}
-              className="text-red-400 hover:text-red-600 text-sm underline"
-            >
-              Tentar Recarregar (sem limpar)
-            </button>
-          </div>
+      <div className="flex h-screen overflow-hidden bg-gray-50 font-sans text-gray-900 antialiased">
+        <div className="hidden lg:block">
+           <Routes>
+             <Route path="/execute" element={null} />
+             <Route path="*" element={<Sidebar />} />
+           </Routes>
         </div>
-      ) : (!initialized || isInitializing) ? (
-        <div className="flex h-screen flex-col items-center justify-center bg-gray-50">
-          <Loader2 className="h-10 w-10 animate-spin text-primary-600 mb-4" />
-          <p className="text-gray-500 font-medium">Iniciando InspecVISA...</p>
+
+        <main className="flex-1 overflow-y-auto w-full relative pb-24 lg:pb-0">
+          <Routes>
+            <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+            <Route path="/clients" element={<ProtectedRoute><Clients /></ProtectedRoute>} />
+            <Route path="/clients/:id" element={<ProtectedRoute><ClientDetails /></ProtectedRoute>} />
+            <Route path="/schedules" element={<ProtectedRoute><Schedules /></ProtectedRoute>} />
+            <Route path="/settings" element={<ProtectedRoute requiredRole="admin"><Settings /></ProtectedRoute>} />
+            <Route path="/importar-dados" element={<ProtectedRoute requiredRole="admin"><ImportLegacyData /></ProtectedRoute>} />
+            <Route path="/inspections" element={<Inspections />} />
+            <Route path="/new" element={<NewInspection />} />
+            <Route path="/execute" element={<InspectionExecution />} />
+            <Route path="/summary" element={<InspectionSummary />} />
+            <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
+              <Route index element={<AdminTemplates />} />
+              <Route path="templates" element={<AdminTemplates />} />
+              <Route path="templates/import" element={<SmartImporter />} />
+              <Route path="legislations" element={<LegislationsManager />} />
+            </Route>
+            <Route path="/debug" element={<Debug />} />
+            <Route path="/access-denied" element={<AccessDenied />} />
+          </Routes>
+        </main>
+
+        <div className="lg:hidden">
+          <Routes>
+             <Route path="/execute" element={null} />
+             <Route path="*" element={<BottomNav />} />
+          </Routes>
         </div>
-      ) : !user ? (
-        <Login />
-      ) : !name ? (
-        <ProfileSelection />
-      ) : (
-        <div className="flex h-screen overflow-hidden bg-gray-50 font-sans text-gray-900 antialiased selection:bg-primary-500 selection:text-white">
-          
-          {/* Desktop Sidebar hidden on execution screen */}
-          <div className="hidden lg:block">
-             <Routes>
-               <Route path="/execute" element={null} />
-               <Route path="*" element={<Sidebar />} />
-             </Routes>
-          </div>
-
-          {/* Main Workspace */}
-          <main className="flex-1 overflow-y-auto w-full relative pb-24 lg:pb-0">
-            <Routes>
-              {/* Rotas staff (admin / consultant) */}
-              <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-              <Route path="/clients" element={<ProtectedRoute><Clients /></ProtectedRoute>} />
-              <Route path="/clients/:id" element={<ProtectedRoute><ClientDetails /></ProtectedRoute>} />
-              <Route path="/schedules" element={<ProtectedRoute><Schedules /></ProtectedRoute>} />
-              
-              {/* Administração e Migração */}
-              <Route path="/settings" element={<ProtectedRoute requiredRole="admin"><Settings /></ProtectedRoute>} />
-              <Route path="/importar-dados" element={<ProtectedRoute requiredRole="admin"><ImportLegacyData /></ProtectedRoute>} />
-
-              {/* Rotas compartilhadas (staff + client) */}
-              <Route path="/inspections" element={<Inspections />} />
-              <Route path="/new" element={<NewInspection />} />
-              <Route path="/execute" element={<InspectionExecution />} />
-              <Route path="/summary" element={<InspectionSummary />} />
-
-              {/* Utilitárias */}
-              <Route path="/debug" element={<Debug />} />
-              <Route path="/access-denied" element={<AccessDenied />} />
-            </Routes>
-          </main>
-
-          {/* Mobile Bottom Nav hidden on execution screen */}
-          <div className="lg:hidden">
-            <Routes>
-               <Route path="/execute" element={null} />
-               <Route path="*" element={<BottomNav />} />
-            </Routes>
-          </div>
-          
-        </div>
-      )}
+      </div>
     </BrowserRouter>
   );
 }

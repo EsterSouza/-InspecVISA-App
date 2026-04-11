@@ -5,7 +5,7 @@ import { ArrowLeft, Trash2, Copy, RefreshCw, Search, Wrench, AlertTriangle } fro
 import { useNavigate } from 'react-router-dom';
 import { syncData } from '../services/syncService';
 
-const Debug: React.FC = () => {
+export function Debug() {
   const [logs, setLogs] = useState<SyncLog[]>([]);
   const [report, setReport] = useState<Record<string, any> | null>(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -93,7 +93,7 @@ const Debug: React.FC = () => {
               <RefreshCw size={20} />
             </button>
             <button onClick={copyLogs} className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200" title="Copiar logs">
-              <Copy size={20} />
+              <RefreshCw size={20} />
             </button>
             <button onClick={clearLogs} className="p-2 bg-red-100 text-red-600 rounded-lg hover:bg-red-200" title="Limpar logs">
               <Trash2 size={20} />
@@ -231,6 +231,4 @@ const Debug: React.FC = () => {
       </div>
     </div>
   );
-};
-
-export default Debug;
+}

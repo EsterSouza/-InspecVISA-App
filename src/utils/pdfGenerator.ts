@@ -613,8 +613,66 @@ export async function generatePDF(
     addFooter(i, totalPages);
   }
 
+  // Draw Legislation References as a separate page at the very end (before saving)
+  drawLegislationPage(doc, responses);
+
   const filename = `Inspecao_${(inspection.clientName || 'cliente').replace(/\s+/g, '_')}_${formatDate(inspection.inspectionDate).replace(/\//g, '-')}.pdf`;
   doc.save(filename);
+}
+
+function drawLegislationPage(doc: jsPDF, results: InspectionResponse[]) {
+  // Adding a new page for references
+  doc.addPage();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  
+  doc.setFillColor(243, 244, 246);
+  doc.rect(0, 0, pageWidth, 40, 'F');
+  
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(22);
+  doc.setTextColor(17, 24, 39);
+  doc.text('REFERÊNCIAS LEGISLATIVAS', 20, 25);
+  
+  doc.setFontSize(10);
+  doc.setFont('helvetica', 'normal');
+  doc.setTextColor(107, 114, 128);
+  doc.text('Base legal utilizada para fundamentar os itens de inspeção avaliados.', 20, 34);
+
+  let y = 60;
+  
+  // These are the most common laws in TreinaVISA ROIs
+  const uniqueLaws = [
+    'RDC Nº 63/2011 - Requisitos de Boas Práticas de Funcionamento para Serviços de Saúde',
+    'RDC Nº 15/2012 - Requisitos de Boas Práticas para o Processamento de Produtos para Saúde',
+    'RDC Nº 222/2018 - Boas Práticas de Gerenciamento dos Resíduos de Serviços de Saúde',
+    'RDC Nº 50/2002 - Regulamento Técnico para planejamento, programação... de EAS',
+    'RDC Nº 36/2013 - Institui ações para a segurança do paciente em serviços de saúde',
+    'NR 32 - Segurança e Saúde no Trabalho em Serviços de Saúde',
+    'Lei Federal nº 6.437/1977 - Configura infrações à legislação sanitária federal e estabelece sanções'
+  ];
+
+  uniqueLaws.forEach((law, idx) => {
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(31, 41, 55);
+    doc.text(`${idx + 1}.`, 20, y);
+    
+    doc.setFont('helvetica', 'normal');
+    const splitLaw = doc.splitTextToSize(law, pageWidth - 60);
+    doc.text(splitLaw, 30, y);
+    y += (splitLaw.length * 6) + 4;
+    
+    if (y > 270) {
+      doc.addPage();
+      y = 30;
+    }
+  });
+
+  // Footer text
+  doc.setFontSize(8);
+  doc.setFont('helvetica', 'italic');
+  doc.setTextColor(156, 163, 175);
+  doc.text('Este relatório baseia-se nas normas vigentes na data da inspeção.', 20, 285);
 }
 
 function hexToRgb(hex: string): [number, number, number] {
