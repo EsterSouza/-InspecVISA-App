@@ -213,11 +213,33 @@ export function ChecklistItem({
             />
           </div>
 
+          <datalist id="responsables-list">
+            <option value="Responsável Técnico (RT)" />
+            <option value="Gerência / Administração" />
+            <option value="Equipe de Manutenção" />
+            <option value="Equipe de Limpeza / Higiene" />
+            <option value="Manipulador / Funcionário" />
+            <option value="Proprietário" />
+            <option value="Empresa Terceirizada" />
+          </datalist>
+
+          <datalist id="deadlines-list">
+            <option value="Imediato" />
+            <option value="24 horas" />
+            <option value="7 dias" />
+            <option value="15 dias" />
+            <option value="30 dias" />
+            <option value="45 dias" />
+            <option value="60 dias" />
+            <option value="90 dias" />
+          </datalist>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <label className="text-sm font-medium text-gray-700">Responsável{isNotCompliant ? ' p/ Correção' : ''}</label>
               <input
                 type="text"
+                list="responsables-list"
                 className="w-full rounded-md border border-gray-300 p-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 shadow-sm"
                 placeholder="Ex: Gerente, RT..."
                 value={response?.responsible || ''}
@@ -228,6 +250,7 @@ export function ChecklistItem({
               <label className="text-sm font-medium text-gray-700">{isNotCompliant ? 'Prazo Sugerido' : 'Prazo de Implantação'}</label>
               <input
                 type="text"
+                list="deadlines-list"
                 className="w-full rounded-md border border-gray-300 p-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 shadow-sm"
                 placeholder="Ex: Imediato, 15 dias..."
                 value={response?.deadline || ''}
