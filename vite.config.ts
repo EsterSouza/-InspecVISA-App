@@ -51,7 +51,8 @@ export default defineConfig({
       output: {
         manualChunks: {
           vendor: ['react', 'react-dom', 'react-router-dom', 'lucide-react', 'dexie', '@supabase/supabase-js', 'zustand'],
-          ui: ['framer-motion', 'clsx', 'tailwind-merge'],
+          heavy: ['recharts', 'jspdf', 'jspdf-autotable', 'pdfjs-dist'],
+          ui: ['clsx', 'tailwind-merge'],
         },
       },
     },
