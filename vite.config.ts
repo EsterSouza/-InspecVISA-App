@@ -24,6 +24,7 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+        maximumFileSizeToCacheInBytes: 4000000,
         runtimeCaching: [
           {
             urlPattern: /^https:\/\/fonts\.googleapis\.com/,
@@ -45,6 +46,16 @@ export default defineConfig({
       },
     }),
   ],
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'react-router-dom', 'lucide-react', 'dexie', '@supabase/supabase-js', 'zustand'],
+          ui: ['framer-motion', 'clsx', 'tailwind-merge'],
+        },
+      },
+    },
+  },
   css: {
     postcss: './postcss.config.js',
   },

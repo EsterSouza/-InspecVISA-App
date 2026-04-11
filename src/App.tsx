@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { Suspense, lazy, useEffect, useState } from 'react';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { initializeDatabase } from './db/database';
 import { getTemplates } from './data/templates';
@@ -10,27 +10,28 @@ import { Loader2, AlertCircle } from 'lucide-react';
 import { Sidebar } from './components/layout/Sidebar';
 import { BottomNav } from './components/layout/BottomNav';
 
-// Pages
-import { Dashboard } from './pages/Dashboard';
-import { Clients } from './pages/Clients';
-import { Inspections } from './pages/Inspections';
-import { NewInspection } from './pages/NewInspection';
-import { InspectionExecution } from './pages/InspectionExecution';
-import { InspectionSummary } from './pages/InspectionSummary';
-import { Settings } from './pages/Settings';
-import { ClientDetails } from './pages/ClientDetails';
-import { Schedules } from './pages/Schedules';
-import { ImportLegacyData } from './pages/ImportLegacyData';
-import { Debug } from './pages/Debug';
-import { AccessDenied } from './pages/AccessDenied';
+// Lazy Loaded Pages
+const Dashboard = lazy(() => import('./pages/Dashboard').then(m => ({ default: m.Dashboard })));
+const Clients = lazy(() => import('./pages/Clients').then(m => ({ default: m.Clients })));
+const ClientDetails = lazy(() => import('./pages/ClientDetails').then(m => ({ default: m.ClientDetails })));
+const Schedules = lazy(() => import('./pages/Schedules').then(m => ({ default: m.Schedules })));
+const Settings = lazy(() => import('./pages/Settings').then(m => ({ default: m.Settings })));
+const ImportLegacyData = lazy(() => import('./pages/ImportLegacyData').then(m => ({ default: m.ImportLegacyData })));
+const Inspections = lazy(() => import('./pages/Inspections').then(m => ({ default: m.Inspections })));
+const NewInspection = lazy(() => import('./pages/NewInspection').then(m => ({ default: m.NewInspection })));
+const InspectionExecution = lazy(() => import('./pages/InspectionExecution').then(m => ({ default: m.InspectionExecution })));
+const InspectionSummary = lazy(() => import('./pages/InspectionSummary').then(m => ({ default: m.InspectionSummary })));
+const Debug = lazy(() => import('./pages/Debug').then(m => ({ default: m.Debug })));
+const AccessDenied = lazy(() => import('./pages/AccessDenied').then(m => ({ default: m.AccessDenied })));
 
-import { AdminLayout } from './components/layout/AdminLayout';
-import { AdminTemplates } from './pages/admin/AdminTemplates';
-import { SmartImporter } from './pages/admin/SmartImporter';
+const AdminLayout = lazy(() => import('./components/layout/AdminLayout').then(m => ({ default: m.AdminLayout })));
+const AdminTemplates = lazy(() => import('./pages/admin/AdminTemplates').then(m => ({ default: m.AdminTemplates })));
+const SmartImporter = lazy(() => import('./pages/admin/SmartImporter').then(m => ({ default: m.SmartImporter })));
+const LegislationsManager = lazy(() => import('./pages/admin/LegislationsManager').then(m => ({ default: m.LegislationsManager })));
+
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { ProfileSelection } from './pages/ProfileSelection';
 import { Login } from './pages/Login';
-import { LegislationsManager } from './pages/admin/LegislationsManager';
 
 function App() {
   const [isInitializing, setIsInitializing] = useState(true);
@@ -170,26 +171,32 @@ function App() {
         </div>
 
         <main className="flex-1 overflow-y-auto w-full relative pb-24 lg:pb-0">
-          <Routes>
-            <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-            <Route path="/clients" element={<ProtectedRoute><Clients /></ProtectedRoute>} />
-            <Route path="/clients/:id" element={<ProtectedRoute><ClientDetails /></ProtectedRoute>} />
-            <Route path="/schedules" element={<ProtectedRoute><Schedules /></ProtectedRoute>} />
-            <Route path="/settings" element={<ProtectedRoute requiredRole="admin"><Settings /></ProtectedRoute>} />
-            <Route path="/importar-dados" element={<ProtectedRoute requiredRole="admin"><ImportLegacyData /></ProtectedRoute>} />
-            <Route path="/inspections" element={<Inspections />} />
-            <Route path="/new" element={<NewInspection />} />
-            <Route path="/execute" element={<InspectionExecution />} />
-            <Route path="/summary" element={<InspectionSummary />} />
-            <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
-              <Route index element={<AdminTemplates />} />
-              <Route path="templates" element={<AdminTemplates />} />
-              <Route path="templates/import" element={<SmartImporter />} />
-              <Route path="legislations" element={<LegislationsManager />} />
-            </Route>
-            <Route path="/debug" element={<Debug />} />
-            <Route path="/access-denied" element={<AccessDenied />} />
-          </Routes>
+          <Suspense fallback={
+            <div className="flex h-full items-center justify-center bg-gray-50/50 backdrop-blur-sm">
+              <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
+            </div>
+          }>
+            <Routes>
+              <Route path="/" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+              <Route path="/clients" element={<ProtectedRoute><Clients /></ProtectedRoute>} />
+              <Route path="/clients/:id" element={<ProtectedRoute><ClientDetails /></ProtectedRoute>} />
+              <Route path="/schedules" element={<ProtectedRoute><Schedules /></ProtectedRoute>} />
+              <Route path="/settings" element={<ProtectedRoute requiredRole="admin"><Settings /></ProtectedRoute>} />
+              <Route path="/importar-dados" element={<ProtectedRoute requiredRole="admin"><ImportLegacyData /></ProtectedRoute>} />
+              <Route path="/inspections" element={<Inspections />} />
+              <Route path="/new" element={<NewInspection />} />
+              <Route path="/execute" element={<InspectionExecution />} />
+              <Route path="/summary" element={<InspectionSummary />} />
+              <Route path="/admin" element={<ProtectedRoute><AdminLayout /></ProtectedRoute>}>
+                <Route index element={<AdminTemplates />} />
+                <Route path="templates" element={<AdminTemplates />} />
+                <Route path="templates/import" element={<SmartImporter />} />
+                <Route path="legislations" element={<LegislationsManager />} />
+              </Route>
+              <Route path="/debug" element={<Debug />} />
+              <Route path="/access-denied" element={<AccessDenied />} />
+            </Routes>
+          </Suspense>
         </main>
 
         <div className="lg:hidden">
