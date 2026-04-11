@@ -1,18 +1,17 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { FileDown, ArrowLeft, Loader2, Share2, Save, Info, Users2 } from 'lucide-react';
+import { FileDown, ArrowLeft, Loader2, Save, Info, Users2 } from 'lucide-react';
 import { db } from '../db/database';
 import { supabase } from '../lib/supabase';
 import { getTemplateById, enrichTemplate } from '../data/templates';
-import { calculateScore, classificationLabel, classificationColor } from '../utils/scoring';
+import { calculateScore, classificationColor, classificationLabel } from '../utils/scoring';
 import { generatePDF } from '../utils/pdfGenerator';
 import { useSettingsStore } from '../store/useSettingsStore';
 import type { Inspection, InspectionResponse, ChecklistTemplate } from '../types';
 import { Button } from '../components/ui/Button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/Card';
-import { Badge } from '../components/ui/Badge';
-import { type FoodEstablishmentType, FOOD_SEGMENT_LABELS } from '../types';
 import { formatDateTime } from '../utils/imageUtils';
+import { ScorePanel } from '../components/inspection/ScorePanel';
 
 export function InspectionSummary() {
   const location = useLocation();
@@ -261,102 +260,18 @@ export function InspectionSummary() {
             </CardContent>
           </Card>
         )}
-        <div className="text-center bg-white rounded-2xl shadow-sm border border-gray-200 p-8 sm:p-12 mt-6">
-          <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">{currentInspection.clientName || 'Inspeção'}</h1>
-          <p className="mt-2 text-gray-500 font-medium">{template.name}</p>
-          <p className="text-sm text-gray-400 mt-1">Concluída em {formatDateTime(currentInspection.completedAt || new Date())}</p>
+
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-200 overflow-hidden mt-6">
+          <div className="p-8 sm:p-12 text-center border-b border-gray-100 pb-8">
+            <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">{currentInspection.clientName || 'Inspeção'}</h1>
+            <p className="mt-2 text-gray-500 font-medium">{template.name}</p>
+            <p className="text-sm text-gray-400 mt-1">Concluída em {formatDateTime(currentInspection.completedAt || new Date())}</p>
+          </div>
           
-          <div className="mt-8 flex flex-col items-center justify-center space-y-2">
-              <div 
-                className="text-6xl sm:text-7xl font-black tracking-tighter"
-                style={{ color: scoreColor || '#666' }}
-              >
-                {typeof scoreArea.rp === 'number' ? scoreArea.rp.toFixed(1) : '0.0'}
-              </div>
-              <div className="text-[10px] text-gray-400 font-bold uppercase tracking-widest -mt-2">
-                Índice de Risco MARP (0-15)
-              </div>
-              <div 
-                className="px-4 py-1.5 rounded-full text-sm font-bold tracking-widest text-white uppercase mt-4"
-                style={{ backgroundColor: scoreColor || '#666' }}
-              >
-                {scoreArea.classification ? classificationLabel(scoreArea.classification) : 'NF'}
-              </div>
-          </div>
-
-          <div className="mt-6 flex justify-center gap-8 text-[11px] font-bold text-gray-500 uppercase">
-             <div className="text-center">
-                <div className="text-gray-900 text-lg">{typeof scoreArea.ic === 'number' ? scoreArea.ic.toFixed(2) : '—'}</div>
-                <div>IC (Crítico)</div>
-             </div>
-             <div className="text-center border-x border-gray-100 px-8">
-                <div className="text-gray-900 text-lg">{typeof scoreArea.inc === 'number' ? scoreArea.inc.toFixed(2) : '—'}</div>
-                <div>INC (Não Crítico)</div>
-             </div>
-             <div className="text-center">
-                <div className="text-gray-900 text-lg">{Math.round(scoreArea.scorePercentage || 0)}%</div>
-                <div>Conformidade</div>
-             </div>
-          </div>
-
-
-          <div className="mt-10 grid grid-cols-2 sm:grid-cols-4 gap-4 max-w-2xl mx-auto border-t border-gray-100 pt-8">
-              <div className="flex flex-col items-center">
-                <span className="text-3xl font-bold text-gray-900">{scoreArea.evaluatedItems || 0}</span>
-                <span className="text-xs font-semibold text-gray-500 uppercase mt-1">Itens Avaliados</span>
-              </div>
-              <div className="flex flex-col items-center">
-                <span className="text-3xl font-bold text-green-600">{scoreArea.compliesCount || 0}</span>
-                <span className="text-xs font-semibold text-green-800 uppercase mt-1">Conformes</span>
-              </div>
-              <div className="flex flex-col items-center">
-                <span className="text-3xl font-bold text-red-600">{scoreArea.notCompliesCount || 0}</span>
-                <span className="text-xs font-semibold text-red-800 uppercase mt-1">Nãos Conf.</span>
-              </div>
-              <div className="flex flex-col items-center">
-                <span className="text-3xl font-bold text-slate-500">{scoreArea.notObservedCount || 0}</span>
-                <span className="text-xs font-semibold text-slate-500 uppercase mt-1">N. Obs (NO)</span>
-              </div>
+          <div className="p-6 sm:p-8 bg-gray-50">
+            <ScorePanel inspection={currentInspection} responses={responses} />
           </div>
         </div>
-
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-lg">Resumo por Seção</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              {(scoreArea.scoreBySection || []).map((s) => {
-                const sectionDef = template?.sections?.find(sec => sec.id === s.sectionId);
-                return (
-                  <div key={s.sectionId} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 rounded-lg border border-gray-100 bg-gray-50/50">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2">
-                          <h4 className="font-semibold text-gray-900 text-sm">{s.sectionTitle}</h4>
-                          {sectionDef?.isExtraSection && (
-                            <Badge variant="outline" className="bg-amber-50 text-amber-700 border-amber-200 text-[9px] py-0 uppercase">
-                              Específico: {sectionDef.segmentKey ? (FOOD_SEGMENT_LABELS[sectionDef.segmentKey as FoodEstablishmentType] || sectionDef.segmentKey) : ''}
-                            </Badge>
-                          )}
-                        </div>
-                        <div className="text-xs text-gray-500 mt-1 flex gap-3">
-                          <span>{Math.round(s.scorePercentage || 0)}% Conforme</span>
-                          <span className="text-red-500">{s.notCompliesCount || 0} Irreg.</span>
-                          {(s.notObservedCount || 0) > 0 && <span className="text-slate-500">{s.notObservedCount} Não Obs.</span>}
-                        </div>
-                      </div>
-                      <div className="mt-3 sm:mt-0 w-full sm:w-48 h-2 bg-gray-200 rounded-full overflow-hidden flex">
-                        <div style={{ width: `${s.totalItems > 0 ? ((s.compliesCount || 0)/s.totalItems)*100 : 0}%` }} className="bg-green-500 h-full" />
-                        <div style={{ width: `${s.totalItems > 0 ? ((s.notCompliesCount || 0)/s.totalItems)*100 : 0}%` }} className="bg-red-500 h-full" />
-                        <div style={{ width: `${s.totalItems > 0 ? ((s.notObservedCount || 0)/s.totalItems)*100 : 0}%` }} className="bg-slate-400 h-full" />
-                        <div style={{ width: `${s.totalItems > 0 ? ((s.notApplicableCount || 0)/s.totalItems)*100 : 0}%` }} className="bg-gray-300 h-full" />
-                      </div>
-                  </div>
-                );
-              })}
-            </div>
-          </CardContent>
-        </Card>
       </div>
       
       <div className="pb-10"></div>

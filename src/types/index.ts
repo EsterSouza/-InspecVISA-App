@@ -176,6 +176,7 @@ export interface SectionScore {
   evaluatedItems: number;
   compliesCount: number;
   notCompliesCount: number;
+  criticalNotCompliesCount: number;
   notApplicableCount: number;
   notObservedCount: number;
   scorePercentage: number;
@@ -193,6 +194,7 @@ export interface InspectionScore {
   evaluatedItems: number;
   compliesCount: number;
   notCompliesCount: number;
+  criticalNotCompliesCount: number;
   notApplicableCount: number;
   notObservedCount: number;
   notEvaluatedCount: number;

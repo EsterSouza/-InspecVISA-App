@@ -72,6 +72,12 @@ export function calculateScore(responses: InspectionResponse[], sections: Sectio
   
   const compliesCount = evaluatedResponses.filter((r: InspectionResponse) => r.result === 'complies').length;
   const notCompliesCount = evaluatedResponses.filter((r: InspectionResponse) => r.result === 'not_complies').length;
+  const criticalNotCompliesCount = evaluatedResponses.filter((r: InspectionResponse) => {
+    if (r.result !== 'not_complies') return false;
+    const item = allItems.find((i: ChecklistItem) => i.id === r.itemId);
+    return item?.isCritical;
+  }).length;
+  
   const notApplicableCount = evaluatedResponses.filter((r: InspectionResponse) => r.result === 'not_applicable').length;
   const notObservedCount = evaluatedResponses.filter((r: InspectionResponse) => r.result === 'not_observed').length;
   
@@ -98,6 +104,12 @@ export function calculateScore(responses: InspectionResponse[], sections: Sectio
     const sEvaluated = sectionResponses.filter((r: InspectionResponse) => r.result && r.result !== 'not_evaluated');
     const sComplies = sEvaluated.filter((r: InspectionResponse) => r.result === 'complies').length;
     const sNotComplies = sEvaluated.filter((r: InspectionResponse) => r.result === 'not_complies').length;
+    const sCriticalNC = sEvaluated.filter((r: InspectionResponse) => {
+      if (r.result !== 'not_complies') return false;
+      const item = sectionItems.find((i: ChecklistItem) => i.id === r.itemId);
+      return item?.isCritical;
+    }).length;
+    
     const sDenom = sComplies + sNotComplies;
     
     const sectionMarp = calcMARPValues(sectionItems, responseMap);
@@ -109,6 +121,7 @@ export function calculateScore(responses: InspectionResponse[], sections: Sectio
       evaluatedItems: sEvaluated.length,
       compliesCount: sComplies,
       notCompliesCount: sNotComplies,
+      criticalNotCompliesCount: sCriticalNC,
       notApplicableCount: sEvaluated.filter((r: InspectionResponse) => r.result === 'not_applicable').length,
       notObservedCount: sEvaluated.filter((r: InspectionResponse) => r.result === 'not_observed').length,
       scorePercentage: sDenom > 0 ? (sComplies / sDenom) * 100 : 0,
@@ -127,6 +140,7 @@ export function calculateScore(responses: InspectionResponse[], sections: Sectio
     evaluatedItems: evaluatedCount,
     compliesCount,
     notCompliesCount,
+    criticalNotCompliesCount,
     notApplicableCount,
     notObservedCount,
     notEvaluatedCount,
