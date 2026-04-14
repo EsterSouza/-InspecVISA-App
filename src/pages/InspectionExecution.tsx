@@ -72,12 +72,6 @@ export function InspectionExecution() {
           .where('inspectionId').equals(id)
           .filter(r => !r.deletedAt)
           .toArray();
-
-        // Fix logic for legacy IDs if needed... (Keeping existing check)
-        const isLegacy = insp.templateId === 'tpl-ilpi-v1' || resps.some(r => r.itemId.startsWith('ilpi-'));
-        if (isLegacy) {
-          // ... (Existing migration logic remains same)
-        }
         
         for (const r of resps) {
           r.photos = await db.photos
@@ -106,16 +100,31 @@ export function InspectionExecution() {
 
   const template = useMemo(() => {
     if (!currentInspection) return null;
-    return getTemplateById(currentInspection.templateId);
+    const base = getTemplateById(currentInspection.templateId);
+    if (!base) {
+      console.warn('Template not found:', currentInspection.templateId);
+      return null;
+    }
+    return base;
   }, [currentInspection]);
 
   const visibleSections = useMemo(() => {
     if (!template || !currentInspection) return [];
     const role = useSettingsStore.getState().settings.consultantRole || 'saude';
-    return getEffectiveTemplate(template, currentInspection as any, role, false).sections;
+    
+    const clientContext = {
+      ...currentInspection,
+      category: (currentInspection as any).clientCategory || (currentInspection as any).category
+    };
+    
+    try {
+      return getEffectiveTemplate(template, clientContext as any, role, false).sections;
+    } catch (err) {
+      console.error('Error generating effective template:', err);
+      return template.sections;
+    }
   }, [template, currentInspection]);
 
-  // ✅ BACKGROUND SYNC: Pull updates from other professionals (Nutrição/Saúde)
   useEffect(() => {
     if (!currentInspection || loading) return;
 
@@ -132,7 +141,6 @@ export function InspectionExecution() {
         if (error) throw error;
         if (!remoteResps) return;
 
-        // Map to internal format
         const mappedRemote: InspectionResponse[] = remoteResps.map(rr => ({
           id: rr.id,
           inspectionId: rr.inspection_id,
@@ -146,33 +154,28 @@ export function InspectionExecution() {
           createdAt: new Date(rr.created_at),
           updatedAt: new Date(rr.updated_at || rr.created_at),
           synced: 1,
-          photos: [] // Photos are handled separately via Dexie cache
+          photos: []
         }));
 
         mergeResponses(mappedRemote);
         
-        // Also update Dexie for local persistence of remote updates
         for (const m of mappedRemote) {
           const local = await db.responses.get(m.id);
-          
-          // CRITICAL PROTECTION: Do not overwrite local database if there are unsynced changes
           if (local && local.synced === 0) continue;
 
           await db.responses.put({
             ...m,
-            // Keep local photos if they exist, as the remote select doesn't include them
             photos: local?.photos || [] 
           });
         }
       } catch (err) {
         console.warn('[Sync] Background pull failed:', err);
       }
-    }, 15000); // 15 seconds
+    }, 15000);
 
     return () => clearInterval(pullInterval);
   }, [currentInspection?.id, responses.length, loading]);
 
-  // ✅ UPDATED AUTO-SAVE: ONLINE-DIRECT MODO
   useEffect(() => {
     if (loading || !currentInspection) return;
     
@@ -219,7 +222,7 @@ export function InspectionExecution() {
       id: generateId(),
       inspectionId: currentInspection.id,
       itemId: `extra|${sectionId}|${generateId()}`,
-      result: 'not_observed', // Default to NO until user grades it
+      result: 'not_observed',
       customDescription: desc,
       photos: [],
       createdAt: new Date(),
@@ -249,7 +252,6 @@ export function InspectionExecution() {
         signatureDataUrl: signature
       };
 
-      // ✅ FINAL PUSH: Salva o status final no Supabase via Direct
       await db.onlineUpsert('inspections', finalData, db.inspections);
       navigate('/summary', { state: { inspectionId: currentInspection.id } });
     }
@@ -301,30 +303,60 @@ export function InspectionExecution() {
                  <div className="space-y-4">
                     {section.id === 'sec-fed-12' && (
                       <div className="space-y-4 mb-6 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                        <label className="text-xs font-bold text-slate-400 uppercase tracking-widest">Dimensionamento ILPI</label>
-                        <div className="grid grid-cols-3 gap-4">
-                           {['Level1', 'Level2', 'Level3'].map((lvl, i) => (
-                             <div key={lvl}>
-                               <span className="text-[10px] text-slate-500 block mb-1">GRAU {i+1}</span>
+                         <div className="flex items-center justify-between">
+                            <label className="text-xs font-bold text-slate-400 uppercase tracking-widest text-slate-500">Dimensionamento ILPI</label>
+                            {currentInspection.state === 'RJ' && (
+                              <Badge variant="outline" className="text-[10px] border-blue-200 text-blue-600 bg-blue-50 font-bold">
+                                Rio de Janeiro (Lei 8.049/18)
+                              </Badge>
+                            )}
+                         </div>
+                         <div className="grid grid-cols-3 gap-4">
+                            {['Level1', 'Level2', 'Level3'].map((lvl, i) => (
+                              <div key={lvl}>
+                                <span className="text-[10px] text-slate-500 block mb-1 font-semibold uppercase tracking-tight">GRAU {i+1}</span>
+                                <input 
+                                  type="number" 
+                                  className="w-full bg-white border border-slate-200 rounded-lg p-2 font-bold focus:ring-2 focus:ring-primary-500 outline-none shadow-sm"
+                                  value={(currentInspection as any)[`dependencyLevel${i+1}`] || 0}
+                                  onChange={(e) => updateStaffData(`dependencyLevel${i+1}`, parseInt(e.target.value) || 0)}
+                                />
+                              </div>
+                            ))}
+                         </div>
+                         <div className="grid grid-cols-2 gap-4 pb-4 border-b border-slate-200">
+                            <div>
+                               <span className="text-[10px] text-primary-600 font-bold block mb-1 uppercase tracking-tight">Equipe Cuidadores Atual</span>
                                <input 
                                  type="number" 
-                                 className="w-full bg-white border border-slate-200 rounded-lg p-2 font-bold"
-                                 value={(currentInspection as any)[`dependencyLevel${i+1}`] || 0}
-                                 onChange={(e) => updateStaffData(`dependencyLevel${i+1}`, parseInt(e.target.value) || 0)}
+                                 placeholder="Qtd. Cuidadores..."
+                                 className="w-full bg-white border border-primary-100 rounded-lg p-2 font-bold text-primary-900 shadow-sm"
+                                 value={currentInspection.observedStaff || 0}
+                                 onChange={(e) => updateStaffData('observedStaff', parseInt(e.target.value) || 0)}
                                />
-                             </div>
-                           ))}
-                        </div>
-                        <ILPIStaffCalculator 
-                          level1={currentInspection.dependencyLevel1 || 0}
-                          level2={currentInspection.dependencyLevel2 || 0}
-                          level3={currentInspection.dependencyLevel3 || 0}
-                          currentCaregivers={currentInspection.observedStaff || 0}
-                        />
+                            </div>
+                            <div>
+                               <span className="text-[10px] text-primary-600 font-bold block mb-1 uppercase tracking-tight">Equipe Técnica Atual</span>
+                               <input 
+                                 type="number" 
+                                 placeholder="Técnicos/Enf..."
+                                 className="w-full bg-white border border-primary-100 rounded-lg p-2 font-bold text-primary-900 shadow-sm"
+                                 value={currentInspection.observedNursingTechs || 0}
+                                 onChange={(e) => updateStaffData('observedNursingTechs', parseInt(e.target.value) || 0)}
+                               />
+                            </div>
+                         </div>
+                         <ILPIStaffCalculator 
+                           level1={currentInspection.dependencyLevel1 || 0}
+                           level2={currentInspection.dependencyLevel2 || 0}
+                           level3={currentInspection.dependencyLevel3 || 0}
+                           currentCaregivers={currentInspection.observedStaff || 0}
+                           currentNursingTechs={currentInspection.observedNursingTechs || 0}
+                           isRJ={currentInspection.state === 'RJ'}
+                         />
                       </div>
                     )}
 
-                    {/* Render Template Items */}
                     {section.items.map((item) => {
                       const resp = responses.find(r => r.itemId === item.id);
                       return (
@@ -341,7 +373,6 @@ export function InspectionExecution() {
                       );
                     })}
 
-                    {/* Render Extra Section Items */}
                     {responses
                       .filter(r => r.itemId?.startsWith(`extra|${section.id}|`))
                       .map((resp) => (
