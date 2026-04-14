@@ -77,13 +77,33 @@ export const useInspectionStore = create<InspectionState>((set) => ({
         // Safety check 1: Don't overwrite unsynced local changes
         if (local && local.synced === 0) continue;
 
-        // Safety check 2: Compare timestamps robustly
+        // Safety check 2: Compare timestamps
         const serverUpdate = new Date(rr.updatedAt || rr.createdAt).getTime();
         const localUpdate = local?.updatedAt ? new Date(local.updatedAt).getTime() : 0;
 
         if (!local || serverUpdate > localUpdate + 1000) {
           if (localIdx >= 0) {
-            updated[localIdx] = { ...updated[localIdx], ...rr, synced: 1 };
+            // CRITICAL PROTECTION: Only merge fields that are safe
+            // We keep the local text if it exists and only overwrite if the server version is newer 
+            // AND the local version is empty, OR if we are doing a manual sync (not handled here).
+            // Actually, per user request, we STOP automatic text sync for fields with content.
+            
+            const mergedItem = { ...updated[localIdx] };
+            
+            // 1. Always sync the Result (the choice: complies/not_complies)
+            mergedItem.result = rr.result;
+            
+            // 2. Sync text fields ONLY IF they are empty locally (prevent erasing)
+            if (!mergedItem.situationDescription) mergedItem.situationDescription = rr.situationDescription;
+            if (!mergedItem.correctiveAction) mergedItem.correctiveAction = rr.correctiveAction;
+            if (!mergedItem.responsible) mergedItem.responsible = rr.responsible;
+            if (!mergedItem.deadline) mergedItem.deadline = rr.deadline;
+            
+            // 3. Update internal metadata
+            mergedItem.updatedAt = new Date(serverUpdate);
+            mergedItem.synced = 1;
+            
+            updated[localIdx] = mergedItem;
           } else {
             updated.push({ ...rr, synced: 1 });
           }
