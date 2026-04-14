@@ -26,17 +26,12 @@ export const useInspectionStore = create<InspectionState>((set) => ({
       const now = new Date();
       let recordToPersist: InspectionResponse | undefined;
       
-      // 1. ATOMIC SYNC UPDATE: Use functional set to ensure we have latest state
+      // 1. OPTIMISTIC UPDATE in memory
       set((state) => {
         const existing = state.responses.find(r => r.id === responseId);
         if (!existing) return state;
 
-        recordToPersist = {
-          ...existing,
-          ...updates,
-          updatedAt: now,
-          synced: 0
-        };
+        recordToPersist = { ...existing, ...updates, updatedAt: now, synced: 0 };
 
         return {
           responses: state.responses.map((r) =>
@@ -45,17 +40,21 @@ export const useInspectionStore = create<InspectionState>((set) => ({
         };
       });
 
-      // 2. BACKGROUND SAVE: Use the record we just built (no extra DB read needed)
+      // 2. IMMEDIATE DEXIE SAVE — protects against refresh before Supabase completes
+      if (recordToPersist) {
+        await db.responses.put(recordToPersist);
+      }
+
+      // 3. BACKGROUND SUPABASE SYNC (fire-and-forget)
       if (recordToPersist) {
         db.onlineUpsert('responses', recordToPersist, db.responses).then((res) => {
           if (res.synced === 1) {
-             set((state) => ({
-               responses: state.responses.map(r => r.id === responseId ? { ...r, synced: 1 } : r)
-             }));
+            set((state) => ({
+              responses: state.responses.map(r => r.id === responseId ? { ...r, synced: 1 } : r)
+            }));
           }
         });
 
-        // 2b. CRITICAL: Persist photos to the dedicated 'photos' table
         if (updates.photos) {
           for (const photo of updates.photos) {
             db.onlineUpsert('photos', { ...photo, responseId }, db.photos);
@@ -65,7 +64,7 @@ export const useInspectionStore = create<InspectionState>((set) => ({
 
       return true;
     } catch (error) {
-      console.error('Error in atomic update:', error);
+      console.error('Error in updateResponse:', error);
       return false;
     }
   },

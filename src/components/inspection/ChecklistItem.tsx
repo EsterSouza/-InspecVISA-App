@@ -29,39 +29,52 @@ export const ChecklistItem = memo(function ChecklistItem({
 }: ChecklistItemProps) {
   const [showObs, setShowObs] = useState(!!response?.situationDescription || !!response?.correctiveAction || (response?.photos?.length ?? 0) > 0);
 
-  // Buffering local para performance (Evita re-render global por caractere)
+  // Local buffers — prevent global re-render on every keystroke
   const [localSituation, setLocalSituation] = useState(response?.situationDescription || '');
   const [localAction, setLocalAction] = useState(response?.correctiveAction || '');
   const [localResponsible, setLocalResponsible] = useState(response?.responsible || '');
   const [localDeadline, setLocalDeadline] = useState(response?.deadline || '');
   
-  const [isSyncing, setIsSyncing] = useState(false);
   const [isFocused, setIsFocused] = useState<string | null>(null);
 
-  // Sync local state if external state changes, BUT ONLY if not focused
+  // Sync from store when another device updates this item (only when field is not focused)
+  useEffect(() => { if (isFocused !== 'situation') setLocalSituation(response?.situationDescription || ''); }, [response?.situationDescription]);
+  useEffect(() => { if (isFocused !== 'action') setLocalAction(response?.correctiveAction || ''); }, [response?.correctiveAction]);
+  useEffect(() => { if (isFocused !== 'responsible') setLocalResponsible(response?.responsible || ''); }, [response?.responsible]);
+  useEffect(() => { if (isFocused !== 'deadline') setLocalDeadline(response?.deadline || ''); }, [response?.deadline]);
+
+  // ─── AUTO-SAVE WHILE TYPING (1.5s debounce) ───────────────────────────────
+  // This guarantees data is saved even if the user never leaves the field.
   useEffect(() => {
-    if (isFocused !== 'situation') setLocalSituation(response?.situationDescription || '');
-  }, [response?.situationDescription, isFocused]);
+    if (localSituation === (response?.situationDescription || '')) return;
+    const t = setTimeout(() => onUpdateDetails({ situationDescription: localSituation }), 1500);
+    return () => clearTimeout(t);
+  }, [localSituation]);
 
   useEffect(() => {
-    if (isFocused !== 'action') setLocalAction(response?.correctiveAction || '');
-  }, [response?.correctiveAction, isFocused]);
+    if (localAction === (response?.correctiveAction || '')) return;
+    const t = setTimeout(() => onUpdateDetails({ correctiveAction: localAction }), 1500);
+    return () => clearTimeout(t);
+  }, [localAction]);
 
   useEffect(() => {
-    if (isFocused !== 'responsible') setLocalResponsible(response?.responsible || '');
-  }, [response?.responsible, isFocused]);
+    if (localResponsible === (response?.responsible || '')) return;
+    const t = setTimeout(() => onUpdateDetails({ responsible: localResponsible }), 1500);
+    return () => clearTimeout(t);
+  }, [localResponsible]);
 
   useEffect(() => {
-    if (isFocused !== 'deadline') setLocalDeadline(response?.deadline || '');
-  }, [response?.deadline, isFocused]);
+    if (localDeadline === (response?.deadline || '')) return;
+    const t = setTimeout(() => onUpdateDetails({ deadline: localDeadline }), 1500);
+    return () => clearTimeout(t);
+  }, [localDeadline]);
 
-  const handleBlur = async (field: keyof InspectionResponse, value: string) => {
+  // onBlur: save immediately (catches fast navigation)
+  const handleBlur = (field: keyof InspectionResponse, value: string) => {
     setIsFocused(null);
-    if (response?.[field] === value) return;
-    
-    setIsSyncing(true);
-    onUpdateDetails({ [field]: value });
-    setIsSyncing(false);
+    if ((response?.[field] || '') !== value) {
+      onUpdateDetails({ [field]: value });
+    }
   };
 
   const isSelected = !!response?.result;
