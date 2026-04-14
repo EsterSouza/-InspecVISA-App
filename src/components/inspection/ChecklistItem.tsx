@@ -14,6 +14,7 @@ interface ChecklistItemProps {
   onUpdateDetails: (details: Partial<InspectionResponse>) => void;
   onAddPhoto: (photo: Omit<InspectionPhoto, 'id'>) => void;
   onRemovePhoto: (id: string) => void;
+  onEditDescription?: (description: string) => void;
 }
 
 export const ChecklistItem = memo(function ChecklistItem({
@@ -104,7 +105,18 @@ export const ChecklistItem = memo(function ChecklistItem({
             )}
           </div>
 
-          <p className="text-[15px] font-medium leading-relaxed text-gray-900 mt-2">
+          <p 
+            className={cn(
+              "text-[15px] font-medium leading-relaxed text-gray-900 mt-2",
+              item.id.startsWith('extra|') && "cursor-pointer hover:text-primary-600 border-b border-dashed border-transparent hover:border-primary-300"
+            )}
+            onClick={() => {
+              if (item.id.startsWith('extra|') && onEditDescription) {
+                const newDesc = window.prompt('Editar item:', response?.customDescription || item.description);
+                if (newDesc !== null) onEditDescription(newDesc);
+              }
+            }}
+          >
             {item.id.startsWith('extra|') ? (response?.customDescription || item.description) : item.description}
           </p>
         </div>

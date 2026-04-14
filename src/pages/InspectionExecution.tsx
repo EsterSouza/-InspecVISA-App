@@ -210,22 +210,23 @@ export function InspectionExecution() {
     }
   };
 
-  const handleAddExtraItem = (sectionId: string) => {
+  const handleAddExtraItem = async (sectionId: string) => {
     if (!currentInspection) return;
-    const desc = window.prompt('Descrição:');
+    const desc = window.prompt('Descrição do item extra:');
     if (!desc) return;
 
     const newResp: InspectionResponse = {
       id: generateId(),
       inspectionId: currentInspection.id,
       itemId: `extra|${sectionId}|${generateId()}`,
-      result: 'not_complies',
+      result: 'not_observed', // Default to NO until user grades it
       customDescription: desc,
       photos: [],
       createdAt: new Date(),
-      updatedAt: new Date()
+      updatedAt: new Date(),
+      synced: 0
     };
-    setResponses([...responses, newResp]);
+    await addResponse(newResp);
   };
 
   const updateStaffData = (field: string, value: number) => {
@@ -323,6 +324,7 @@ export function InspectionExecution() {
                       </div>
                     )}
 
+                    {/* Render Template Items */}
                     {section.items.map((item) => {
                       const resp = responses.find(r => r.itemId === item.id);
                       return (
@@ -338,6 +340,27 @@ export function InspectionExecution() {
                         />
                       );
                     })}
+
+                    {/* Render Extra Section Items */}
+                    {responses
+                      .filter(r => r.itemId?.startsWith(`extra|${section.id}|`))
+                      .map((resp) => (
+                        <ChecklistItem
+                          key={resp.id}
+                          item={{ 
+                            id: resp.itemId, 
+                            description: resp.customDescription || 'Item Extra',
+                            category: section.title,
+                            order: 999 
+                          }}
+                          response={resp}
+                          onChange={(res) => updateResponse(resp.id, { result: res })}
+                          onUpdateDetails={(u) => updateResponse(resp.id, u)}
+                          onEditDescription={(d) => updateResponse(resp.id, { customDescription: d })}
+                          onAddPhoto={(p) => updateResponse(resp.id, { photos: [...resp.photos, { ...p, id: generateId() }] })}
+                          onRemovePhoto={(pid) => updateResponse(resp.id, { photos: resp.photos.filter(p => p.id !== pid) })}
+                        />
+                      ))}
 
                     <Button variant="ghost" className="w-full border-2 border-dashed border-gray-100 text-gray-400 hover:text-primary-600 hover:bg-white" onClick={() => handleAddExtraItem(section.id)}>
                       <PlusCircle className="mr-2 h-4 w-4" /> Observação Extra
