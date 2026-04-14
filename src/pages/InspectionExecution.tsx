@@ -350,7 +350,9 @@ export function InspectionExecution() {
                           item={{ 
                             id: resp.itemId, 
                             description: resp.customDescription || 'Item Extra',
-                            category: section.title,
+                            sectionId: section.id,
+                            weight: 1,
+                            isCritical: false,
                             order: 999 
                           }}
                           response={resp}

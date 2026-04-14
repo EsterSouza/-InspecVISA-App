@@ -25,6 +25,7 @@ export const ChecklistItem = memo(function ChecklistItem({
   onUpdateDetails,
   onAddPhoto,
   onRemovePhoto,
+  onEditDescription,
 }: ChecklistItemProps) {
   const [showObs, setShowObs] = useState(!!response?.situationDescription || !!response?.correctiveAction || (response?.photos?.length ?? 0) > 0);
 
