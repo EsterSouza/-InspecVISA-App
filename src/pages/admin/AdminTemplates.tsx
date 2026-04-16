@@ -23,14 +23,7 @@ export function AdminTemplates() {
       setIsLoading(true);
       setLoadError(null);
 
-      // Always show static built-in templates
-      const staticData = getTemplates().map(t => ({
-        ...t,
-        isStatic: true,
-        updated_at: new Date().toISOString(),
-      }));
-
-      // Merge with remote templates (Supabase)
+      // Fetch remote templates first (editable, Supabase)
       let remoteData: any[] = [];
       try {
         remoteData = await TemplateService.listTemplates();
@@ -38,14 +31,20 @@ export function AdminTemplates() {
         console.warn('[AdminTemplates] Could not fetch remote templates:', remoteErr);
       }
 
-      // Merge: remote takes precedence if same ID
-      const remoteIds = new Set(remoteData.map((t: any) => t.id));
-      const merged = [
-        ...remoteData,
-        ...staticData.filter((t) => !remoteIds.has(t.id)),
-      ];
+      // Build set of names that remote already covers
+      const remoteNames = new Set(remoteData.map((t: any) => t.name));
 
-      setTemplates(merged);
+      // Static templates only shown if their name is NOT in remote
+      const staticData = getTemplates()
+        .filter(t => !remoteNames.has(t.name))
+        .map(t => ({
+          ...t,
+          isStatic: true,
+          updated_at: new Date().toISOString(),
+        }));
+
+      // Merge: remote (editable) first, then unique statics (read-only)
+      setTemplates([...remoteData, ...staticData]);
     } catch (err: any) {
       console.error('Error loading templates:', err);
       setLoadError(err?.message || 'Erro ao carregar roteiros.');

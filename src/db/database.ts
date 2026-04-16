@@ -173,8 +173,26 @@ export class InspectionDatabase extends Dexie {
 
 export const db = new InspectionDatabase();
 
+/**
+ * Initializes the local Dexie template cache.
+ * Remote templates (from Supabase) take priority over static built-in ones.
+ * Deduplication is done by NAME to prevent duplicates when seeds and statics overlap.
+ */
 export async function initializeDatabase(templates: ChecklistTemplate[]) {
-  await db.templates.bulkPut(templates);
+  // Separate remote (have Supabase UUIDs) from static (have tpl-* IDs)
+  const remoteTemplates = templates.filter(t => !t.id.startsWith('tpl-'));
+  const staticTemplates = templates.filter(t => t.id.startsWith('tpl-'));
+
+  // Build a set of names already covered by remote templates
+  const remoteNames = new Set(remoteTemplates.map(t => t.name));
+
+  // Only include static templates whose name is NOT already in remote
+  const uniqueStatics = staticTemplates.filter(t => !remoteNames.has(t.name));
+
+  // Merge: remote first, then non-duplicate statics
+  const deduped = [...remoteTemplates, ...uniqueStatics];
+
+  await db.templates.bulkPut(deduped);
 }
 
 // ✅ REFACTORED DELETE (ONLINE-FIRST)
