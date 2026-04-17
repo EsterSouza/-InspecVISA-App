@@ -319,7 +319,7 @@ export async function syncData(isManual: boolean = false) {
         const serverUpdate = new Date(rc.updated_at || rc.created_at);
         const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
 
-        if (shouldUpdateLocal(serverUpdate, localUpdate)) {
+        if (!local || shouldUpdateLocal(serverUpdate, localUpdate)) {
           await db.clients.put({
             id: rc.id, name: rc.name, cnpj: rc.cnpj, address: rc.address,
             category: rc.category as any, foodTypes: rc.food_types,
@@ -329,7 +329,8 @@ export async function syncData(isManual: boolean = false) {
             deletedAt: rc.deleted_at ? new Date(rc.deleted_at) : null,
             synced: 1
           });
-        } else if (local && local.synced === 0) {
+        } else if (local && local.synced !== 1) {
+          // Record confirmed on server → mark synced
           await db.clients.update(rc.id, { synced: 1 });
         }
       }
@@ -382,7 +383,7 @@ export async function syncData(isManual: boolean = false) {
         const serverUpdate = new Date(ri.updated_at || ri.created_at);
         const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
 
-        if (shouldUpdateLocal(serverUpdate, localUpdate)) {
+        if (!local || shouldUpdateLocal(serverUpdate, localUpdate)) {
           await db.inspections.put({
             id: ri.id, clientId: ri.client_id, templateId: ri.template_id,
             consultantName: ri.consultant_name, inspectionDate: new Date(ri.inspection_date),
@@ -398,7 +399,8 @@ export async function syncData(isManual: boolean = false) {
             deletedAt: ri.deleted_at ? new Date(ri.deleted_at) : null,
             synced: 1
           });
-        } else if (local && local.synced === 0) {
+        } else if (local && local.synced !== 1) {
+          // Record exists on server → always mark as synced regardless of who is newer
           await db.inspections.update(ri.id, { synced: 1 });
         }
       }
@@ -573,7 +575,7 @@ export async function syncData(isManual: boolean = false) {
         const serverUpdate = new Date(rs.updated_at || rs.created_at);
         const localUpdate = local?.updatedAt ? new Date(local.updatedAt) : undefined;
 
-        if (shouldUpdateLocal(serverUpdate, localUpdate)) {
+        if (!local || shouldUpdateLocal(serverUpdate, localUpdate)) {
           await db.schedules.put({
             id: rs.id, clientId: rs.client_id, scheduledAt: new Date(rs.scheduled_at),
             status: rs.status as any, notes: rs.notes, user_id: rs.user_id, 
@@ -581,7 +583,7 @@ export async function syncData(isManual: boolean = false) {
             deletedAt: rs.deleted_at ? new Date(rs.deleted_at) : null,
             synced: 1
           });
-        } else if (local && local.synced === 0) {
+        } else if (local && local.synced !== 1) {
           await db.schedules.update(rs.id, { synced: 1 });
         }
       }
