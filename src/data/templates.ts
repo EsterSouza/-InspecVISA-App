@@ -509,23 +509,31 @@ export function getTemplateById(id: string): ChecklistTemplate | undefined {
 function filterSectionsByRole(sections: any[], role: string, full: boolean) {
   if (full || !role || role === 'ambos') return sections;
 
-  // Identify sections that belong to Nutrition (Hardcoded for Federal ILPI)
+  // Identify sections that belong to Nutrition - by ID (static templates) OR by title keywords (remote templates)
   const nutritionSectionIds = ['sec-fed-05', 'sec-fed-06'];
-  const templateHasNutrition = sections.some((s: any) => nutritionSectionIds.includes(s.id));
+  const nutritionKeywords = ['nutri', 'aliment', 'dieta', 'cardápio', 'refei'];
 
-  // If the template doesn't have these nutrition sections (e.g. Estética),
-  // don't filter anything - show full template.
+  const isNutritionSection = (s: any): boolean => {
+    if (nutritionSectionIds.includes(s.id)) return true;
+    const titleLower = (s.title || '').toLowerCase();
+    return nutritionKeywords.some(kw => titleLower.includes(kw));
+  };
+
+  const templateHasNutrition = sections.some(isNutritionSection);
+
+  // If no nutrition sections found in this template, show everything (e.g. Estética)
   if (!templateHasNutrition) return sections;
 
   return sections.filter((section: any) => {
-    const isNutrition = nutritionSectionIds.includes(section.id);
-    
+    const isNutrition = isNutritionSection(section);
+
     if (role === 'nutricao') return isNutrition;
     if (role === 'saude') return !isNutrition;
-    
+
     return true;
   });
 }
+
 
 /**
  * Main function to get the final template for a specific context.
