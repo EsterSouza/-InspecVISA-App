@@ -118,7 +118,6 @@ export function ClientDetails() {
       const updatedClient: Client = {
         ...client,
         ...data,
-        synced: 0,
         updatedAt: new Date()
       };
 
@@ -126,14 +125,15 @@ export function ClientDetails() {
         delete updatedClient.foodTypes;
       }
 
-      await db.clients.put(updatedClient);
-      setClient(updatedClient);
+      await db.onlineUpsert('clients', updatedClient, db.clients);
+      setClient({ ...updatedClient, synced: navigator.onLine ? 1 : 0 });
       setIsModalOpen(false);
     } catch (err) {
       console.error(err);
       alert('Erro ao atualizar cliente.');
     }
   };
+
 
   const handleDelete = async () => {
     if (!client) return;
