@@ -17,35 +17,71 @@ interface AuthState {
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       user: null,
       tenantInfo: null,
       loading: true,
       initialized: false,
       setUser: (user) => set({ user, loading: false }),
       signOut: async () => {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut().catch(() => {});
         clearAuthCache();
         set({ user: null, tenantInfo: null });
       },
       initialize: async () => {
-        const { data: { session } } = await supabase.auth.getSession();
-        const user = session?.user ?? null;
-        const tenantInfo = user ? await getCurrentTenant() : null;
-        set({ user, tenantInfo, loading: false, initialized: true });
+        // ✅ OFFLINE-FIRST: If we already have persisted (cached) user state,
+        // mark as initialized immediately — app opens without waiting for network.
+        const persisted = get();
+        if (persisted.user) {
+          set({ initialized: true, loading: false });
 
+          // Validate session silently in background (non-blocking).
+          Promise.resolve().then(async () => {
+            try {
+              const { data: { session } } = await supabase.auth.getSession();
+              if (!session) {
+                // Session expired — force re-login
+                set({ user: null, tenantInfo: null });
+              } else if (!persisted.tenantInfo) {
+                const t = await getCurrentTenant().catch(() => null);
+                set({ tenantInfo: t });
+              }
+            } catch {
+              // Network unavailable — keep cached state as-is
+            }
+          });
+        } else {
+          // No cached user — must fetch from network
+          try {
+            const { data: { session } } = await supabase.auth.getSession();
+            const user = session?.user ?? null;
+            let tenantInfo = null;
+            if (user) {
+              tenantInfo = await getCurrentTenant().catch(() => null);
+            }
+            set({ user, tenantInfo, loading: false, initialized: true });
+          } catch {
+            // Network error and no cached state — show login page
+            set({ user: null, tenantInfo: null, loading: false, initialized: true });
+          }
+        }
+
+        // Listen for future auth state changes
         supabase.auth.onAuthStateChange(async (_event, session) => {
           const u = session?.user ?? null;
-          const t = u ? await getCurrentTenant() : null;
+          let t: TenantInfo | null = null;
+          if (u) {
+            t = await getCurrentTenant().catch(() => null);
+          }
           set({ user: u, tenantInfo: t });
         });
       },
     }),
     {
       name: 'inspec-visa-auth',
-      partialize: (state) => ({ 
+      partialize: (state) => ({
         user: state.user,
-        tenantInfo: state.tenantInfo, // ✅ FIX #1: Persiste tenantInfo para evitar gap de 1-2s no reload
+        tenantInfo: state.tenantInfo,
       }),
     }
   )

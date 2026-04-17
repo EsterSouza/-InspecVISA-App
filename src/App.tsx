@@ -4,7 +4,7 @@ import { initializeDatabase } from './db/database';
 import { getTemplates } from './data/templates';
 import { useSettingsStore } from './store/useSettingsStore';
 import { useAuthStore } from './store/useAuthStore';
-import { Loader2, AlertCircle } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 // Layout
 import { Sidebar } from './components/layout/Sidebar';
@@ -36,7 +36,6 @@ import { Login } from './pages/Login';
 
 function App() {
   const [isInitializing, setIsInitializing] = useState(true);
-  const [initError, setInitError] = useState(false);
   const theme = useSettingsStore((s) => s.settings.theme);
   const { user, initialized, initialize } = useAuthStore();
 
@@ -60,52 +59,49 @@ function App() {
     let didCancel = false;
 
     const initApp = async () => {
-      const timeout = setTimeout(() => {
-        if (!didCancel) {
-          setInitError(true);
-          setIsInitializing(false);
-        }
-      }, 15000);
+      // Step 1: Initialize auth (instant from cache if previously logged in)
+      await initialize();
 
+      // Step 2: Load static templates immediately into Dexie (offline-safe)
+      const staticTemplates = getTemplates();
       try {
-        await initialize();
-        
-        let remoteTemplates = [];
-        if (navigator.onLine) {
-          try {
-            const { TemplateService } = await import('./services/templateService');
-            remoteTemplates = await TemplateService.listTemplates();
-          } catch (tErr) {
-            console.warn('[App] Falha ao buscar roteiros remotos:', tErr);
-          }
-        }
-
-        const staticTemplates = getTemplates();
-        await initializeDatabase([...staticTemplates, ...remoteTemplates]);
-        
-        if (!didCancel) setIsInitializing(false);
-      } catch (err: unknown) {
-        console.error('[App] Init failed:', err);
-        const error = err as Error;
+        await initializeDatabase(staticTemplates);
+      } catch (dbErr: unknown) {
+        const error = dbErr as Error;
         const isBackingStoreError =
           error?.name === 'UnknownError' ||
           error?.message?.includes('backing store');
-
         if (isBackingStoreError) {
           doReset();
           return;
         }
+        console.warn('[App] DB init error (non-fatal):', dbErr);
+      }
 
-        if (!didCancel) {
-          setInitError(true);
-          setIsInitializing(false);
-        }
-      } finally {
-        clearTimeout(timeout);
+      // Step 3: App is ready — show it!
+      if (!didCancel) setIsInitializing(false);
+
+      // Step 4: Fetch remote templates in background (non-blocking)
+      if (navigator.onLine) {
+        import('./services/templateService').then(async ({ TemplateService }) => {
+          try {
+            const remoteTemplates = await TemplateService.listTemplates();
+            if (remoteTemplates?.length) {
+              await initializeDatabase([...staticTemplates, ...remoteTemplates]);
+            }
+          } catch (tErr) {
+            console.warn('[App] Remote templates fetch failed (non-fatal):', tErr);
+          }
+        }).catch(() => {});
       }
     };
 
-    initApp();
+    initApp().catch((err) => {
+      console.error('[App] Fatal init error:', err);
+      // Even on fatal error, unblock UI
+      if (!didCancel) setIsInitializing(false);
+    });
+
     return () => { didCancel = true; };
   }, [initialize]);
 
@@ -130,24 +126,6 @@ function App() {
   }, [initialized, user]);
 
   const name = useSettingsStore((s) => s.settings.name);
-
-  if (initError) {
-    return (
-      <div className="flex h-screen flex-col items-center justify-center bg-red-50 p-6 text-center">
-        <AlertCircle className="h-12 w-12 text-red-600 mb-4" />
-        <h2 className="text-xl font-bold text-red-900 mb-2">Erro na Inicialização</h2>
-        <p className="text-red-700 mb-6 max-w-xs mx-auto">
-          Ocorreu um problema ao carregar os dados locais. Clique abaixo para tentar recuperar seu acesso.
-        </p>
-        <button
-          onClick={doReset}
-          className="rounded-lg bg-red-600 px-6 py-3 text-white font-bold hover:bg-red-700 transition-all"
-        >
-          🔄 Recuperar App
-        </button>
-      </div>
-    );
-  }
 
   if (!initialized || isInitializing) {
     return (

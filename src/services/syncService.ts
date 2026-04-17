@@ -169,7 +169,14 @@ async function pullDeletedRecords(tableName: string, localTable: any) {
 async function cleanupOrphans() {
   await logSync('info', 'Limpando registros órfãos locais...');
   
-  // ✅ IMPORTANTE: Agora também limpa registros marcados como deletados há mais de 30 dias
+  // ✅ GUARD: Se não há clientes carregados ainda, não rodar cleanup para
+  // evitar falso positivo de "órfão" durante sincronização inicial.
+  const clientCount = await db.clients.filter(c => !c.deletedAt).count();
+  if (clientCount === 0) {
+    await logSync('info', 'Cleanup ignorado — banco ainda sem clientes (aguardando pull).');
+    return;
+  }
+
   const thirtyDaysAgo = new Date();
   thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
@@ -200,7 +207,7 @@ async function cleanupOrphans() {
     }
   }
 
-  // Inspeções órfãs
+  // Inspeções órfãs — só marca como deletada se cliente realmente não existe no servidor
   const inspections = await db.inspections.filter(i => !i.deletedAt).toArray();
   for (const i of inspections) {
     const parent = await db.clients.get(i.clientId);
@@ -210,7 +217,7 @@ async function cleanupOrphans() {
     }
   }
 
-  // Schedules órfãos
+  // Schedules órfãos — só marca como deletado se cliente realmente não existe
   const schedules = await db.schedules.filter(s => !s.deletedAt).toArray();
   for (const s of schedules) {
     const parent = await db.clients.get(s.clientId);
@@ -239,7 +246,7 @@ export async function syncData(isManual: boolean = false) {
 
     // 0. CHECK TENANT MISMATCH (Fix for account switching)
     const tenantId = useAuthStore.getState().tenantInfo?.tenantId;
-    const firstClient = await db.clients.limit(1).toArray();
+    const firstClient = await db.clients.filter(c => !c.deletedAt).limit(1).toArray();
     
     if (tenantId && firstClient.length > 0 && firstClient[0].tenantId !== tenantId) {
       await logSync('warn', 'Detectada troca de conta! Limpando dados locais para carregar a nova conta...');
@@ -253,7 +260,8 @@ export async function syncData(isManual: boolean = false) {
           db.schedules.clear()
         ]);
       });
-      await logSync('info', 'Banco local limpo com sucesso.');
+      await logSync('info', 'Banco local limpo. Prosseguindo com importação completa do servidor...');
+      // ✅ Não há dados locais para enviar — pula direto para o PULL
     }
 
     // 0. Sync PROFILE

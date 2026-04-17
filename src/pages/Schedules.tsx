@@ -56,8 +56,11 @@ export function Schedules() {
   };
 
   useEffect(() => {
-    loadData();
-    syncData().then(loadData).catch(console.error);
+    // 1. Carrega dados locais imediatamente (experiência rápida)
+    loadData().then(() => {
+      // 2. Sincroniza em background e recarrega ao concluir
+      syncData().then(loadData).catch(console.error);
+    });
   }, []);
 
   const handleSchedule = async (e: React.FormEvent) => {
@@ -87,7 +90,8 @@ export function Schedules() {
           status: 'pending',
           notes: notes,
         };
-        await db.schedules.add(newSchedule);
+        // ✅ salva na nuvem diretamente (mesmo padrão do edit)
+        await db.onlineUpsert('schedules', newSchedule, db.schedules);
       }
 
       setIsModalOpen(false);
